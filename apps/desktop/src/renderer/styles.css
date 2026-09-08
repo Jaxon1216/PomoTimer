@@ -13,14 +13,16 @@
 html,
 body,
 #root {
+  height: 100%;
   width: 100%;
   min-width: 100%;
-  min-height: 100%;
+  min-height: 0;
   margin: 0;
 }
 
 body {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   overflow: hidden;
   background: #2f384b;
 }
@@ -44,7 +46,8 @@ button:focus-visible {
   --focus: #b01c2e;
   position: relative;
   display: flex;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   overflow: hidden;
   color: var(--foreground);
@@ -105,7 +108,7 @@ button:focus-visible {
   background: transparent;
   border: 0;
   border-radius: 4px;
-  cursor: not-allowed;
+  cursor: pointer;
 }
 
 .iconButton:not(:disabled):hover {
@@ -114,7 +117,8 @@ button:focus-visible {
 }
 
 .iconButton:disabled {
-  opacity: 0.82;
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 .timerStage {
@@ -132,7 +136,7 @@ button:focus-visible {
   width: min(238px, 54vh);
   height: min(238px, 54vh);
   max-height: 238px;
-  margin: auto 0 18px;
+  margin: 0 0 18px;
 }
 
 .timerDial svg {
@@ -223,7 +227,7 @@ button:focus-visible {
 }
 
 .timerControls .iconButton.primary:disabled {
-  opacity: 0.78;
+  opacity: 0.46;
 }
 
 .timerFooter {
@@ -249,12 +253,13 @@ button:focus-visible {
   background: transparent;
   border: 0;
   border-radius: 3px;
-  cursor: not-allowed;
+  cursor: pointer;
   font-size: 11px;
 }
 
 .textControl:disabled {
-  opacity: 0.82;
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 .monitorStatus {
@@ -277,7 +282,8 @@ button:focus-visible {
 .loadingSurface,
 .failureSurface {
   display: flex;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -383,5 +389,87 @@ button:focus-visible {
   .timerFooter {
     min-height: 42px;
     padding-bottom: 10px;
+  }
+}
+
+.timerSurface.compact .titlebar {
+  min-height: 30px;
+  padding: 0 7px;
+}
+
+.timerSurface.compact .windowStatus {
+  gap: 4px;
+  font-size: 8px;
+  letter-spacing: 0.05em;
+}
+
+.timerSurface.compact .statusLight {
+  width: 5px;
+  height: 5px;
+}
+
+.timerSurface.compact .titlebarActions,
+.timerSurface.compact .timerFooter,
+.timerSurface.compact .roundMeta .metaDivider,
+.timerSurface.compact .roundMeta span {
+  display: none;
+}
+
+.timerSurface.compact .timerStage {
+  min-height: 0;
+  padding: 0 8px 7px;
+}
+
+.timerSurface.compact .timerDial {
+  width: min(70vw, 58vh);
+  height: min(70vw, 58vh);
+  min-width: 94px;
+  min-height: 94px;
+  max-width: 166px;
+  max-height: 166px;
+  margin: auto 0 5px;
+}
+
+.timerSurface.compact .dialProgress {
+  stroke-width: 7;
+}
+
+.timerSurface.compact .dialContent time {
+  font-size: clamp(22px, 14vw, 34px);
+}
+
+.timerSurface.compact .roundMeta {
+  min-height: 14px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.timerSurface.compact .timerControls {
+  min-height: 34px;
+  gap: 14px;
+  margin-top: 5px;
+}
+
+.timerSurface.compact .timerControls .iconButton {
+  width: 24px;
+  height: 24px;
+}
+
+.timerSurface.compact .timerControls .iconButton.primary {
+  width: 34px;
+  height: 34px;
+}
+
+@media (max-width: 190px), (max-height: 220px) {
+  .timerSurface.compact .windowStatus span:last-child,
+  .timerSurface.compact .roundMeta {
+    display: none;
+  }
+
+  .timerSurface.compact .timerDial {
+    width: min(76vw, 61vh);
+    height: min(76vw, 61vh);
+    min-width: 76px;
+    min-height: 76px;
   }
 }

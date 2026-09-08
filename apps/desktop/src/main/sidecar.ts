@@ -9,6 +9,7 @@ import {
   protocolVersion,
   timerSnapshotSchema,
   type InitializeResult,
+  type TimerCommand,
   type TimerSnapshot,
 } from "../shared/contracts.js";
 
@@ -49,6 +50,14 @@ const coreInitializeParamsSchema = z
   .strict();
 
 type RpcResponse = z.infer<typeof rpcResponseSchema>;
+
+const timerCommandMethods: Record<TimerCommand, string> = {
+  start: "timer.start",
+  pause: "timer.pause",
+  resume: "timer.resume",
+  next: "timer.next",
+  reset: "timer.reset",
+};
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -107,6 +116,15 @@ export class CoreSupervisor {
   async getSnapshot(): Promise<TimerSnapshot> {
     this.ensureAvailable();
     const result = await this.request("timer.getSnapshot", {});
+    return z
+      .object({ snapshot: timerSnapshotSchema })
+      .strict()
+      .parse(result).snapshot;
+  }
+
+  async command(command: TimerCommand): Promise<TimerSnapshot> {
+    this.ensureAvailable();
+    const result = await this.request(timerCommandMethods[command], {});
     return z
       .object({ snapshot: timerSnapshotSchema })
       .strict()

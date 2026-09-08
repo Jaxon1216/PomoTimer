@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type {
@@ -51,6 +51,16 @@ const capabilities: Capabilities = {
   standingFocus: false,
 };
 
+const runningSnapshot: TimerSnapshot = {
+  ...snapshot,
+  revision: 1,
+  status: "running",
+  automation: {
+    ...snapshot.automation,
+    pauseReason: "none",
+  },
+};
+
 describe("App", () => {
   beforeEach(() => {
     window.pomodoro = {
@@ -73,8 +83,24 @@ describe("App", () => {
     expect(screen.getByText("本地计时")).toBeInTheDocument();
     expect(screen.getByText("输入检测 · 40 秒")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "开始计时（Phase 1）" }),
-    ).toBeDisabled();
+      screen.getByRole("button", { name: "开始计时" }),
+    ).toBeEnabled();
+  });
+
+  it("uses the Core command result as the interactive timer state", async () => {
+    const command = vi.fn().mockResolvedValue(runningSnapshot);
+    window.pomodoro.command = command;
+
+    render(<App />);
+    const start = await screen.findByRole("button", { name: "开始计时" });
+    fireEvent.click(start);
+
+    await waitFor(() => {
+      expect(command).toHaveBeenCalledWith("start");
+    });
+    expect(
+      await screen.findByRole("button", { name: "暂停计时" }),
+    ).toBeEnabled();
   });
 
   it("surfaces an unavailable Core without substituting local state", async () => {

@@ -4,9 +4,11 @@ import { join } from "node:path";
 const desktopDirectory = process.cwd();
 const applicationEntry = join(desktopDirectory, "out", "main", "index.js");
 
-test("starts through the restricted preload bridge and shows Core snapshot", async () => {
+test("starts through the restricted preload bridge, controls the Core, and supports a compact widget", async ({
+}, testInfo) => {
+  const userDataDirectory = testInfo.outputPath("user-data");
   const app = await electron.launch({
-    args: [applicationEntry],
+    args: [applicationEntry, `--user-data-dir=${userDataDirectory}`],
     cwd: desktopDirectory,
     env: {
       ...process.env,
@@ -18,6 +20,17 @@ test("starts through the restricted preload bridge and shows Core snapshot", asy
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
   await expect(window.getByText("30:00")).toBeVisible();
   await expect(window.getByText("输入检测 · 40 秒")).toBeVisible();
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
+
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setBounds({
+      width: 160,
+      height: 180,
+    });
+  });
+  await expect(window.locator(".timerSurface")).toHaveClass(/compact/);
+  await expect(window.getByText("30:00")).toBeVisible();
 
   const bridgeShape = await window.evaluate(() => ({
     apiKeys: Object.keys(window.pomodoro).sort(),

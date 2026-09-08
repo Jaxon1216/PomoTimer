@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from "react";
 import {
   BarChart3,
   CirclePause,
@@ -14,6 +20,7 @@ import {
 import type {
   Capabilities,
   Settings,
+  TimerCommand,
   TimerSnapshot,
 } from "../shared/contracts";
 
@@ -58,26 +65,63 @@ function IconButton({
   label,
   icon: Icon,
   className = "",
+  disabled = false,
+  onClick,
 }: {
   label: string;
   icon: LucideIcon;
   className?: string;
+  disabled?: boolean;
+  onClick?: () => void;
 }): ReactElement {
   return (
     <button
       className={`iconButton ${className}`}
-      disabled
+      disabled={disabled}
       aria-label={label}
       title={label}
       type="button"
+      onClick={onClick}
     >
-      <Icon aria-hidden="true" size={className.includes("primary") ? 21 : 17} strokeWidth={1.8} />
+      <Icon
+        aria-hidden="true"
+        size={className.includes("primary") ? 21 : 17}
+        strokeWidth={1.8}
+      />
     </button>
   );
 }
 
-function AppShell({ data }: { data: CoreViewModel }): ReactElement {
+function primaryAction(snapshot: TimerSnapshot): {
+  command: TimerCommand;
+  label: string;
+  icon: LucideIcon;
+} {
+  if (snapshot.status === "running") {
+    return { command: "pause", label: "暂停计时", icon: CirclePause };
+  }
+  if (snapshot.status === "idle") {
+    return { command: "start", label: "开始计时", icon: CirclePlay };
+  }
+  return { command: "resume", label: "继续计时", icon: CirclePlay };
+}
+
+function AppShell({
+  data,
+  compact,
+  pendingCommand,
+  commandFeedback,
+  onCommand,
+}: {
+  data: CoreViewModel;
+  compact: boolean;
+  pendingCommand: TimerCommand | null;
+  commandFeedback: string | null;
+  onCommand: (command: TimerCommand) => void;
+}): ReactElement {
   const { snapshot, settings, capabilities } = data;
+  const action = primaryAction(snapshot);
+  const controlsDisabled = pendingCommand !== null;
   const elapsedPercent = useMemo(() => {
     const total = snapshot.round.totalDurationMs;
     return total > 0
@@ -88,15 +132,15 @@ function AppShell({ data }: { data: CoreViewModel }): ReactElement {
   const dashOffset = circumference * (1 - elapsedPercent);
 
   return (
-    <main className="timerSurface">
+    <main className={`timerSurface${compact ? " compact" : ""}`}>
       <header className="titlebar">
         <div className="windowStatus">
           <span className="statusLight" aria-hidden="true" />
           <span>本地计时</span>
         </div>
         <div className="titlebarActions">
-          <IconButton label="统计（Phase 1）" icon={BarChart3} />
-          <IconButton label="设置（Phase 1）" icon={Settings2} />
+          <IconButton label="统计（即将推出）" icon={BarChart3} disabled />
+          <IconButton label="设置（即将推出）" icon={Settings2} disabled />
         </div>
       </header>
 
@@ -128,17 +172,29 @@ function AppShell({ data }: { data: CoreViewModel }): ReactElement {
         <div className="roundMeta">
           <h1 id="round-title">{roundLabel(snapshot.round.kind)}</h1>
           <span className="metaDivider" aria-hidden="true" />
-          <span>{stateLabel(snapshot)}</span>
+          <span role="status">{commandFeedback ?? stateLabel(snapshot)}</span>
         </div>
 
         <div className="timerControls" aria-label="计时控制">
-          <IconButton label="重新开始当前轮次（Phase 1）" icon={RotateCcw} />
           <IconButton
-            label="开始计时（Phase 1）"
-            icon={snapshot.status === "running" ? CirclePause : CirclePlay}
-            className="primary"
+            label="重新开始当前轮次"
+            icon={RotateCcw}
+            disabled={controlsDisabled}
+            onClick={() => onCommand("reset")}
           />
-          <IconButton label="跳到下一轮（Phase 1）" icon={SkipForward} />
+          <IconButton
+            label={action.label}
+            icon={action.icon}
+            className="primary"
+            disabled={controlsDisabled}
+            onClick={() => onCommand(action.command)}
+          />
+          <IconButton
+            label="跳到下一轮"
+            icon={SkipForward}
+            disabled={controlsDisabled}
+            onClick={() => onCommand("next")}
+          />
         </div>
       </section>
 
@@ -151,8 +207,9 @@ function AppShell({ data }: { data: CoreViewModel }): ReactElement {
         <button
           className="textControl"
           type="button"
-          disabled
-          title="重置当前轮次（Phase 1）"
+          disabled={controlsDisabled}
+          title="重置当前轮次"
+          onClick={() => onCommand("reset")}
         >
           重置
         </button>
@@ -163,7 +220,12 @@ function AppShell({ data }: { data: CoreViewModel }): ReactElement {
             ? `输入检测 · ${settings.inputIdleThresholdSeconds} 秒`
             : "输入检测不可用"}
         </span>
-        <IconButton label="音量（Phase 1）" icon={Volume2} className="volumeControl" />
+        <IconButton
+          label="音量（即将推出）"
+          icon={Volume2}
+          className="volumeControl"
+          disabled
+        />
       </footer>
     </main>
   );
@@ -172,6 +234,33 @@ function AppShell({ data }: { data: CoreViewModel }): ReactElement {
 export function App(): ReactElement {
   const [data, setData] = useState<CoreViewModel | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingCommand, setPendingCommand] = useState<TimerCommand | null>(null);
+  const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
+  const [compact, setCompact] = useState(false);
+
+  const syncSnapshot = useCallback(async () => {
+    const snapshot = await window.pomodoro.getSnapshot();
+    setData((current) =>
+      current ? { ...current, snapshot } : current,
+    );
+  }, []);
+
+  const runCommand = useCallback(async (command: TimerCommand) => {
+    setPendingCommand(command);
+    setCommandFeedback(null);
+    try {
+      const snapshot = await window.pomodoro.command(command);
+      setData((current) =>
+        current ? { ...current, snapshot } : current,
+      );
+    } catch (reason: unknown) {
+      setCommandFeedback(
+        reason instanceof Error ? reason.message : "计时操作未完成。",
+      );
+    } finally {
+      setPendingCommand(null);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -199,6 +288,31 @@ export function App(): ReactElement {
     };
   }, []);
 
+  useEffect(() => {
+    const updateCompactMode = () => {
+      setCompact(window.innerWidth <= 260 || window.innerHeight <= 310);
+    };
+    updateCompactMode();
+    window.addEventListener("resize", updateCompactMode);
+    return () => {
+      window.removeEventListener("resize", updateCompactMode);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (data?.snapshot.status !== "running") {
+      return;
+    }
+    const intervalID = window.setInterval(() => {
+      void syncSnapshot().catch(() => {
+        setCommandFeedback("无法刷新计时状态。");
+      });
+    }, 500);
+    return () => {
+      window.clearInterval(intervalID);
+    };
+  }, [data?.snapshot.status, syncSnapshot]);
+
   if (error) {
     return (
       <main className="failureSurface" role="alert">
@@ -220,5 +334,13 @@ export function App(): ReactElement {
     );
   }
 
-  return <AppShell data={data} />;
+  return (
+    <AppShell
+      data={data}
+      compact={compact}
+      pendingCommand={pendingCommand}
+      commandFeedback={commandFeedback}
+      onCommand={runCommand}
+    />
+  );
 }

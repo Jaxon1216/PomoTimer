@@ -89,15 +89,22 @@ type initializeResult struct {
 }
 
 type Server struct {
-	store       *store.Store
-	initialized bool
-	snapshot    Snapshot
-	settings    Settings
+	store        *store.Store
+	initialized  bool
+	snapshot     Snapshot
+	settings     Settings
+	now          func() time.Time
+	runningSince time.Time
 }
 
 func NewServer() *Server {
+	return newServer(time.Now)
+}
+
+func newServer(now func() time.Time) *Server {
 	return &Server{
 		settings: defaultSettings(),
+		now:      now,
 	}
 }
 
@@ -108,7 +115,7 @@ func (s *Server) Close() error {
 	return s.store.Close()
 }
 
-func (s *Server) Handle(request protocol.Request) (interface{}, *protocol.RPCError) {
+func (s *Server) Handle(request protocol.Request) (any, *protocol.RPCError) {
 	switch request.Method {
 	case "core.initialize":
 		return s.initialize(request.Params)
@@ -116,10 +123,22 @@ func (s *Server) Handle(request protocol.Request) (interface{}, *protocol.RPCErr
 		if !s.initialized {
 			return nil, coreNotInitialized()
 		}
-		if len(request.Params) != 0 && string(request.Params) != "{}" {
-			return nil, invalidParams("timer.getSnapshot does not accept parameters")
+		if err := requireEmptyParams(request.Params); err != nil {
+			return nil, invalidParams(err.Error())
 		}
-		return map[string]Snapshot{"snapshot": s.snapshot}, nil
+		snapshot, err := s.currentSnapshot()
+		if err != nil {
+			return nil, storeUnavailable()
+		}
+		return map[string]Snapshot{"snapshot": snapshot}, nil
+	case "timer.start", "timer.pause", "timer.resume", "timer.next", "timer.reset":
+		if !s.initialized {
+			return nil, coreNotInitialized()
+		}
+		if err := requireEmptyParams(request.Params); err != nil {
+			return nil, invalidParams(err.Error())
+		}
+		return s.command(request.Method)
 	default:
 		return nil, &protocol.RPCError{
 			Code:    -32601,
@@ -128,7 +147,7 @@ func (s *Server) Handle(request protocol.Request) (interface{}, *protocol.RPCErr
 	}
 }
 
-func (s *Server) initialize(raw json.RawMessage) (interface{}, *protocol.RPCError) {
+func (s *Server) initialize(raw json.RawMessage) (any, *protocol.RPCError) {
 	if s.initialized {
 		return nil, invalidParams("core.initialize may only be called once")
 	}
@@ -152,10 +171,7 @@ func (s *Server) initialize(raw json.RawMessage) (interface{}, *protocol.RPCErro
 
 	openedStore, err := store.Open(params.DataDirectory)
 	if err != nil {
-		return nil, &protocol.RPCError{
-			Code:    -32020,
-			Message: "local storage is unavailable",
-		}
+		return nil, storeUnavailable()
 	}
 	s.store = openedStore
 
@@ -163,15 +179,12 @@ func (s *Server) initialize(raw json.RawMessage) (interface{}, *protocol.RPCErro
 	if err != nil {
 		_ = s.store.Close()
 		s.store = nil
-		return nil, &protocol.RPCError{
-			Code:    -32020,
-			Message: "timer snapshot is unavailable",
-		}
+		return nil, storeUnavailable()
 	}
 	s.snapshot = snapshot
 	s.initialized = true
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	return initializeResult{
 		ProtocolVersion: protocol.Version,
 		Capabilities: Capabilities{
@@ -191,7 +204,7 @@ func (s *Server) loadOrCreateSnapshot() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	if !found {
-		snapshot := initialSnapshot(s.settings)
+		snapshot := initialSnapshot(s.settings, s.now())
 		if err := s.persist(snapshot); err != nil {
 			return Snapshot{}, err
 		}
@@ -207,12 +220,168 @@ func (s *Server) loadOrCreateSnapshot() (Snapshot, error) {
 		snapshot.Automation.ManualPauseLocked = false
 		snapshot.Automation.PauseReason = "core-recovery"
 		snapshot.Revision++
-		snapshot.EmittedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		snapshot.EmittedAt = s.now().UTC().Format(time.RFC3339Nano)
 		if err := s.persist(snapshot); err != nil {
 			return Snapshot{}, err
 		}
 	}
 	return snapshot, nil
+}
+
+func (s *Server) command(method string) (any, *protocol.RPCError) {
+	now := s.now()
+
+	switch method {
+	case "timer.start":
+		if s.snapshot.Status != "idle" &&
+			!(s.snapshot.Round.Kind != "focus" && s.snapshot.Status == "auto-paused") {
+			return nil, invalidTransition()
+		}
+		s.enterRunning(now)
+	case "timer.pause":
+		if s.snapshot.Status != "running" {
+			return nil, invalidTransition()
+		}
+		s.freezeRunning(now)
+		s.snapshot.Status = "manual-paused"
+		s.snapshot.Automation.ManualPauseLocked = true
+		s.snapshot.Automation.PauseReason = "none"
+	case "timer.resume":
+		if s.snapshot.Status != "auto-paused" && s.snapshot.Status != "manual-paused" {
+			return nil, invalidTransition()
+		}
+		s.enterRunning(now)
+	case "timer.next":
+		s.advanceRound()
+	case "timer.reset":
+		s.snapshot.Status = "idle"
+		s.snapshot.RemainingMs = s.snapshot.Round.TotalDurationMs
+		s.snapshot.Automation.ManualPauseLocked = false
+		s.snapshot.Automation.PauseReason = "none"
+		s.runningSince = time.Time{}
+	default:
+		return nil, &protocol.RPCError{
+			Code:    -32601,
+			Message: "method not found",
+		}
+	}
+
+	s.snapshot.Revision++
+	s.snapshot.EmittedAt = now.UTC().Format(time.RFC3339Nano)
+	if err := s.persist(s.snapshot); err != nil {
+		return nil, storeUnavailable()
+	}
+	return map[string]Snapshot{"snapshot": s.snapshot}, nil
+}
+
+func (s *Server) currentSnapshot() (Snapshot, error) {
+	now := s.now()
+	snapshot := s.snapshot
+
+	if snapshot.Status != "running" {
+		snapshot.EmittedAt = now.UTC().Format(time.RFC3339Nano)
+		return snapshot, nil
+	}
+
+	snapshot.RemainingMs = s.remainingAt(now)
+	if snapshot.RemainingMs > 0 {
+		snapshot.EmittedAt = now.UTC().Format(time.RFC3339Nano)
+		return snapshot, nil
+	}
+
+	s.snapshot.RemainingMs = 0
+	s.advanceRound()
+	s.snapshot.Revision++
+	s.snapshot.EmittedAt = now.UTC().Format(time.RFC3339Nano)
+	if err := s.persist(s.snapshot); err != nil {
+		return Snapshot{}, err
+	}
+	return s.snapshot, nil
+}
+
+func (s *Server) enterRunning(now time.Time) {
+	s.snapshot.Status = "running"
+	s.snapshot.Automation.ManualPauseLocked = false
+	s.snapshot.Automation.PauseReason = "none"
+	s.runningSince = now
+}
+
+func (s *Server) freezeRunning(now time.Time) {
+	s.snapshot.RemainingMs = s.remainingAt(now)
+	s.runningSince = time.Time{}
+}
+
+func (s *Server) remainingAt(now time.Time) int64 {
+	if s.snapshot.Status != "running" || s.runningSince.IsZero() {
+		return s.snapshot.RemainingMs
+	}
+	elapsedMilliseconds := now.Sub(s.runningSince).Milliseconds()
+	if elapsedMilliseconds <= 0 {
+		return s.snapshot.RemainingMs
+	}
+	remaining := s.snapshot.RemainingMs - elapsedMilliseconds
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func (s *Server) advanceRound() {
+	nextRound := nextRound(s.snapshot.Round, s.settings)
+	s.snapshot.Round = nextRound
+	s.snapshot.RemainingMs = nextRound.TotalDurationMs
+	s.snapshot.Automation.ManualPauseLocked = false
+	s.runningSince = time.Time{}
+
+	if nextRound.Kind == "focus" {
+		s.snapshot.Status = "idle"
+		s.snapshot.Automation.PauseReason = "none"
+		return
+	}
+	s.snapshot.Status = "auto-paused"
+	s.snapshot.Automation.PauseReason = "break-condition"
+}
+
+func nextRound(current Round, settings Settings) Round {
+	switch current.Kind {
+	case "focus":
+		focusRoundNumber := valueOrZero(current.FocusRoundNumber)
+		breakKind := "short-break"
+		breakDuration := settings.ShortBreakDurationSeconds
+		if focusRoundNumber >= settings.FocusRoundsPerCycle {
+			breakKind = "long-break"
+			breakDuration = settings.LongBreakDurationSeconds
+		}
+		return Round{
+			Kind:             breakKind,
+			CycleNumber:      current.CycleNumber,
+			PositionInCycle:  current.PositionInCycle + 1,
+			FocusRoundNumber: nil,
+			BreakMode:        stringPointer(settings.DefaultBreakMode),
+			TotalDurationMs:  int64(breakDuration) * 1000,
+		}
+	case "short-break":
+		nextFocusRoundNumber := current.PositionInCycle/2 + 1
+		return Round{
+			Kind:             "focus",
+			CycleNumber:      current.CycleNumber,
+			PositionInCycle:  current.PositionInCycle + 1,
+			FocusRoundNumber: integerPointer(nextFocusRoundNumber),
+			BreakMode:        nil,
+			TotalDurationMs:  int64(settings.FocusDurationSeconds) * 1000,
+		}
+	case "long-break":
+		return Round{
+			Kind:             "focus",
+			CycleNumber:      current.CycleNumber + 1,
+			PositionInCycle:  1,
+			FocusRoundNumber: integerPointer(1),
+			BreakMode:        nil,
+			TotalDurationMs:  int64(settings.FocusDurationSeconds) * 1000,
+		}
+	default:
+		return current
+	}
 }
 
 func (s *Server) persist(snapshot Snapshot) error {
@@ -239,10 +408,10 @@ func defaultSettings() Settings {
 	}
 }
 
-func initialSnapshot(settings Settings) Snapshot {
+func initialSnapshot(settings Settings, now time.Time) Snapshot {
 	return Snapshot{
 		Revision:  0,
-		EmittedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		EmittedAt: now.UTC().Format(time.RFC3339Nano),
 		Round: Round{
 			Kind:             "focus",
 			CycleNumber:      1,
@@ -281,7 +450,14 @@ func emptyStatistics(now string, timeZone string) Statistics {
 	}
 }
 
-func decodeStrict(raw json.RawMessage, target interface{}) error {
+func requireEmptyParams(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "{}" {
+		return nil
+	}
+	return errors.New("method does not accept parameters")
+}
+
+func decodeStrict(raw json.RawMessage, target any) error {
 	if len(raw) == 0 {
 		return errors.New("parameters are required")
 	}
@@ -303,6 +479,13 @@ func invalidParams(message string) *protocol.RPCError {
 	}
 }
 
+func invalidTransition() *protocol.RPCError {
+	return &protocol.RPCError{
+		Code:    -32010,
+		Message: "invalid timer transition",
+	}
+}
+
 func coreNotInitialized() *protocol.RPCError {
 	return &protocol.RPCError{
 		Code:    -32002,
@@ -310,6 +493,24 @@ func coreNotInitialized() *protocol.RPCError {
 	}
 }
 
+func storeUnavailable() *protocol.RPCError {
+	return &protocol.RPCError{
+		Code:    -32020,
+		Message: "local storage is unavailable",
+	}
+}
+
 func integerPointer(value int) *int {
 	return &value
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func valueOrZero(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }

@@ -20,8 +20,8 @@ function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 400,
     height: 560,
-    minWidth: 340,
-    minHeight: 440,
+    minWidth: 160,
+    minHeight: 180,
     show: false,
     titleBarStyle: "hiddenInset",
     backgroundColor: "#2f384b",
@@ -80,8 +80,7 @@ function installIpcHandlers(): void {
   });
   ipcMain.handle("pomodoro:command", async (event, command: unknown) => {
     assertMainWindow(event);
-    timerCommandSchema.parse(command);
-    throw new Error("Timer commands are introduced with the Phase 1 state machine.");
+    return core.command(timerCommandSchema.parse(command));
   });
   ipcMain.handle("pomodoro:update-settings", async (event, patch: unknown) => {
     assertMainWindow(event);
