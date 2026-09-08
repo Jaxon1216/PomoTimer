@@ -1,7 +1,7 @@
 :root {
-  color: #152421;
-  background: #eef1e8;
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  color: #d7e1f4;
+  background: #2f384b;
+  font-family: "Avenir Next", "Helvetica Neue", Helvetica, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -13,6 +13,7 @@
 html,
 body,
 #root {
+  width: 100%;
   min-width: 100%;
   min-height: 100%;
   margin: 0;
@@ -20,10 +21,8 @@ body,
 
 body {
   min-height: 100vh;
-  background:
-    linear-gradient(90deg, rgba(21, 36, 33, 0.035) 1px, transparent 1px) 0 0 /
-      30px 30px,
-    #eef1e8;
+  overflow: hidden;
+  background: #2f384b;
 }
 
 button,
@@ -31,269 +30,248 @@ time {
   font: inherit;
 }
 
+button:focus-visible {
+  outline: 2px solid #f05259;
+  outline-offset: 3px;
+}
+
 .timerSurface {
+  --surface: #2f384b;
+  --foreground: #d7e1f4;
+  --muted: #a3aec4;
+  --dim: #768399;
+  --track: #3e4a5d;
+  --focus: #b01c2e;
   position: relative;
   display: flex;
   min-height: 100vh;
   flex-direction: column;
   overflow: hidden;
-  padding: 28px 28px 22px;
-  background: rgba(246, 247, 241, 0.91);
-  animation: enter 180ms ease-out both;
+  color: var(--foreground);
+  background: var(--surface);
+  animation: surfaceIn 180ms ease-out both;
 }
 
-.timerSurface::before {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 6px;
-  content: "";
-  background: #d84e35;
+.titlebar {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px 0 76px;
+  -webkit-app-region: drag;
 }
 
-.topline,
-.coreRow,
-.privacyLine,
-.actionRow {
+.windowStatus,
+.titlebarActions,
+.roundMeta,
+.timerControls,
+.timerFooter,
+.monitorStatus {
   display: flex;
   align-items: center;
 }
 
-.topline {
-  justify-content: space-between;
-  color: #2e5047;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
+.windowStatus {
+  gap: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.statusLight {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  background: #68d2ad;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(104, 210, 173, 0.11);
 }
 
-.brandMark {
-  display: grid;
-  width: 27px;
-  height: 27px;
+.titlebarActions {
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.iconButton {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
   place-items: center;
-  color: #f6f7f1;
-  background: #274b42;
-  border-radius: 5px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: not-allowed;
 }
 
-.stageTag {
-  border-bottom: 1px solid #c7d2c8;
-  color: #7a5144;
-  padding-bottom: 3px;
+.iconButton:not(:disabled):hover {
+  color: var(--foreground);
+  background: rgba(227, 232, 241, 0.08);
 }
 
-.focusArea {
+.iconButton:disabled {
+  opacity: 0.82;
+}
+
+.timerStage {
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 312px;
-  text-align: center;
-}
-
-.eyebrow {
-  margin: 0 0 3px;
-  color: #6b756e;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-h1 {
-  margin: 0 0 14px;
-  color: #183f35;
-  font-size: 31px;
-  font-weight: 500;
-  line-height: 1.05;
-  letter-spacing: 0;
+  min-height: 354px;
+  padding: 4px 28px 0;
 }
 
 .timerDial {
   position: relative;
-  width: 192px;
-  height: 192px;
+  width: min(238px, 54vh);
+  height: min(238px, 54vh);
+  max-height: 238px;
+  margin: auto 0 18px;
 }
 
 .timerDial svg {
   display: block;
   width: 100%;
   height: 100%;
+  overflow: visible;
   transform: rotate(-90deg);
 }
 
 .dialTrack,
 .dialProgress {
   fill: none;
-  stroke-width: 5;
 }
 
 .dialTrack {
-  stroke: #d5ded4;
+  stroke: var(--track);
+  stroke-width: 1.6;
 }
 
 .dialProgress {
-  stroke: #d84e35;
-  stroke-linecap: square;
-  transition: stroke-dashoffset 350ms linear;
+  stroke: var(--focus);
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 450ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .dialContent {
   position: absolute;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
 }
 
 .dialContent time {
-  color: #173b32;
-  font-family: "SF Mono", "Menlo", monospace;
-  font-size: 34px;
+  color: var(--foreground);
+  font-family: "SF Mono", "Roboto Mono", "Menlo", monospace;
+  font-size: clamp(39px, 10.5vw, 48px);
+  font-weight: 410;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
+  line-height: 1;
 }
 
-.dialContent span {
-  margin-top: 4px;
-  color: #7a5144;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 12px;
+.roundMeta {
+  min-height: 19px;
+  gap: 9px;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.11em;
 }
 
-.actionRow {
-  min-height: 44px;
-  gap: 10px;
-  margin-top: 18px;
+.roundMeta h1 {
+  margin: 0;
+  color: var(--focus);
+  font: inherit;
+  text-transform: uppercase;
 }
 
-.actionButton {
-  display: inline-grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  padding: 0;
-  color: #9ca79e;
-  background: transparent;
-  border: 1px solid #d1d8d1;
-  border-radius: 5px;
-  cursor: not-allowed;
-}
-
-.actionButton:focus-visible {
-  outline: 3px solid #d84e35;
-  outline-offset: 2px;
-}
-
-.implementationNote {
-  margin: 1px 0 0;
-  color: #7d8580;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 12px;
-}
-
-.corePanel {
-  border-top: 1px solid #d5ddd4;
-  border-bottom: 1px solid #d5ddd4;
-}
-
-.coreRow {
-  min-height: 68px;
-  gap: 11px;
-}
-
-.coreRow + .coreRow {
-  border-top: 1px solid #e4e8e1;
-}
-
-.coreIcon {
-  display: grid;
-  width: 30px;
-  height: 30px;
+.metaDivider,
+.footerDivider {
+  width: 1px;
+  height: 12px;
   flex: 0 0 auto;
-  place-items: center;
-  border-radius: 5px;
+  background: var(--track);
 }
 
-.coreIcon.input {
-  color: #286b5a;
-  background: #dcebe2;
+.timerControls {
+  min-height: 48px;
+  gap: 21px;
+  margin-top: 14px;
 }
 
-.coreIcon.break {
-  color: #9a563b;
-  background: #f3e4d9;
+.timerControls .iconButton {
+  width: 29px;
+  height: 29px;
+  color: var(--muted);
 }
 
-.coreRow div {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
+.timerControls .iconButton.primary {
+  width: 45px;
+  height: 45px;
+  color: var(--foreground);
+  border: 1.5px solid #aeb8c9;
+  border-radius: 50%;
 }
 
-.coreRow strong {
-  color: #263f39;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 13px;
-  letter-spacing: 0;
+.timerControls .iconButton.primary:disabled {
+  opacity: 0.78;
 }
 
-.coreRow div span {
+.timerFooter {
+  min-height: 48px;
+  justify-content: center;
+  gap: 10px;
+  padding: 7px 18px 15px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.roundCount {
+  min-width: 33px;
+  color: var(--foreground);
+  font-family: "SF Mono", "Roboto Mono", "Menlo", monospace;
+  font-size: 11px;
+  text-align: center;
+}
+
+.textControl {
+  padding: 3px 2px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: not-allowed;
+  font-size: 11px;
+}
+
+.textControl:disabled {
+  opacity: 0.82;
+}
+
+.monitorStatus {
+  gap: 5px;
   overflow: hidden;
-  color: #747d76;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 12px;
+  max-width: 134px;
+  color: var(--dim);
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.statusDot,
-.cycleValue {
-  flex: 0 0 auto;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.statusDot {
-  color: #216652;
-}
-
-.statusDot::before {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 5px;
-  content: "";
-  background: #2e9a71;
-  border-radius: 50%;
-  vertical-align: 1px;
-}
-
-.cycleValue {
-  color: #856451;
-}
-
-.privacyLine {
-  gap: 7px;
-  margin-top: 17px;
-  color: #607168;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 11px;
-  line-height: 1.35;
+.volumeControl {
+  width: 24px;
+  height: 24px;
+  margin-left: -3px;
+  color: var(--muted);
 }
 
 .loadingSurface,
@@ -304,14 +282,14 @@ h1 {
   align-items: center;
   justify-content: center;
   padding: 28px;
+  background: #2f384b;
   text-align: center;
 }
 
 .loadingSurface {
-  gap: 15px;
-  color: #50665d;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 14px;
+  gap: 14px;
+  color: #a3aec4;
+  font-size: 13px;
 }
 
 .loadingSurface p {
@@ -320,78 +298,90 @@ h1 {
 
 .loadingLine {
   display: block;
-  width: 80px;
+  width: 64px;
   height: 2px;
   overflow: hidden;
-  background: #d1dad0;
+  background: #3e4a5d;
 }
 
 .loadingLine::after {
   display: block;
-  width: 36px;
+  width: 28px;
   height: 100%;
   content: "";
-  background: #d84e35;
-  animation: scan 950ms ease-in-out infinite;
+  background: #b01c2e;
+  animation: scan 850ms ease-in-out infinite;
 }
 
 .failureSurface {
-  color: #583c34;
-  background: #f6f0eb;
+  color: #d7e1f4;
 }
 
 .failureMark {
-  color: #bd543d;
+  color: #b01c2e;
 }
 
 .failureSurface h1 {
   margin: 15px 0 8px;
-  color: #583c34;
-  font-size: 25px;
+  color: #d7e1f4;
+  font-size: 23px;
+  font-weight: 550;
+  letter-spacing: 0;
 }
 
 .failureSurface p {
-  max-width: 250px;
+  max-width: 260px;
   margin: 0;
-  color: #806b62;
-  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
-  font-size: 14px;
+  color: #a3aec4;
+  font-size: 13px;
   line-height: 1.5;
 }
 
-@keyframes enter {
+@keyframes surfaceIn {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: scale(0.987);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: scale(1);
   }
 }
 
 @keyframes scan {
   0%,
   100% {
-    transform: translateX(-38px);
+    transform: translateX(-28px);
   }
   50% {
-    transform: translateX(80px);
+    transform: translateX(64px);
   }
 }
 
-@media (max-width: 380px) {
-  .timerSurface {
-    padding-right: 20px;
-    padding-left: 20px;
+@media (max-width: 380px), (max-height: 500px) {
+  .titlebar {
+    min-height: 38px;
+    padding-right: 10px;
+    padding-left: 66px;
+  }
+
+  .timerStage {
+    min-height: 290px;
+    padding-top: 0;
   }
 
   .timerDial {
-    width: 174px;
-    height: 174px;
+    width: min(206px, 48vh);
+    height: min(206px, 48vh);
+    margin-bottom: 12px;
   }
 
-  .focusArea {
-    min-height: 288px;
+  .timerControls {
+    margin-top: 10px;
+  }
+
+  .timerFooter {
+    min-height: 42px;
+    padding-bottom: 10px;
   }
 }

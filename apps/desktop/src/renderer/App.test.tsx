@@ -63,15 +63,15 @@ describe("App", () => {
     };
   });
 
-  it("renders the Core snapshot and phase boundary", async () => {
+  it("renders the Core snapshot in the compact timer shell", async () => {
     render(<App />);
 
     expect(
       await screen.findByRole("heading", { name: "专注" }),
     ).toBeInTheDocument();
     expect(screen.getByText("30:00")).toBeInTheDocument();
-    expect(screen.getByText("工程地基")).toBeInTheDocument();
-    expect(screen.getByText("已连接")).toBeInTheDocument();
+    expect(screen.getByText("本地计时")).toBeInTheDocument();
+    expect(screen.getByText("输入检测 · 40 秒")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "开始计时（Phase 1）" }),
     ).toBeDisabled();

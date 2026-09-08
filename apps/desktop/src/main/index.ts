@@ -18,13 +18,13 @@ let mainWindow: BrowserWindow | undefined;
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 440,
-    height: 620,
-    minWidth: 360,
-    minHeight: 500,
+    width: 400,
+    height: 560,
+    minWidth: 340,
+    minHeight: 440,
     show: false,
     titleBarStyle: "hiddenInset",
-    backgroundColor: "#f6f7f1",
+    backgroundColor: "#2f384b",
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,

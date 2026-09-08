@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import {
+  BarChart3,
   CirclePause,
   CirclePlay,
-  Coffee,
   Keyboard,
   RotateCcw,
-  ShieldCheck,
+  Settings2,
   SkipForward,
   TimerReset,
+  Volume2,
   type LucideIcon,
 } from "lucide-react";
 import type {
@@ -53,57 +54,66 @@ function stateLabel(snapshot: TimerSnapshot): string {
     : "等待检测条件";
 }
 
-function ActionButton({
+function IconButton({
   label,
   icon: Icon,
+  className = "",
 }: {
   label: string;
   icon: LucideIcon;
+  className?: string;
 }): ReactElement {
   return (
-    <button className="actionButton" disabled aria-label={label} title={label}>
-      <Icon aria-hidden="true" size={19} strokeWidth={1.8} />
+    <button
+      className={`iconButton ${className}`}
+      disabled
+      aria-label={label}
+      title={label}
+      type="button"
+    >
+      <Icon aria-hidden="true" size={className.includes("primary") ? 21 : 17} strokeWidth={1.8} />
     </button>
   );
 }
 
 function AppShell({ data }: { data: CoreViewModel }): ReactElement {
   const { snapshot, settings, capabilities } = data;
-  const percent = useMemo(() => {
+  const elapsedPercent = useMemo(() => {
     const total = snapshot.round.totalDurationMs;
-    return total > 0 ? Math.max(0, Math.min(1, snapshot.remainingMs / total)) : 0;
+    return total > 0
+      ? Math.max(0, Math.min(1, 1 - snapshot.remainingMs / total))
+      : 0;
   }, [snapshot.remainingMs, snapshot.round.totalDurationMs]);
-  const circumference = 2 * Math.PI * 43;
-  const dashOffset = circumference * (1 - percent);
+  const circumference = 2 * Math.PI * 105;
+  const dashOffset = circumference * (1 - elapsedPercent);
 
   return (
     <main className="timerSurface">
-      <header className="topline">
-        <span className="brand">
-          <span className="brandMark" aria-hidden="true">
-            <TimerReset size={15} strokeWidth={2.1} />
-          </span>
-          番茄时刻
-        </span>
-        <span className="stageTag">工程地基</span>
+      <header className="titlebar">
+        <div className="windowStatus">
+          <span className="statusLight" aria-hidden="true" />
+          <span>本地计时</span>
+        </div>
+        <div className="titlebarActions">
+          <IconButton label="统计（Phase 1）" icon={BarChart3} />
+          <IconButton label="设置（Phase 1）" icon={Settings2} />
+        </div>
       </header>
 
-      <section className="focusArea" aria-labelledby="round-title">
-        <p className="eyebrow">第 {snapshot.round.cycleNumber} 个周期</p>
-        <h1 id="round-title">{roundLabel(snapshot.round.kind)}</h1>
+      <section className="timerStage" aria-labelledby="round-title">
         <div
           className="timerDial"
           aria-label={`${roundLabel(snapshot.round.kind)}，剩余 ${formatDuration(
             snapshot.remainingMs,
           )}，${stateLabel(snapshot)}`}
         >
-          <svg viewBox="0 0 112 112" aria-hidden="true">
-            <circle className="dialTrack" cx="56" cy="56" r="43" />
+          <svg viewBox="0 0 240 240" aria-hidden="true">
+            <circle className="dialTrack" cx="120" cy="120" r="105" />
             <circle
               className="dialProgress"
-              cx="56"
-              cy="56"
-              r="43"
+              cx="120"
+              cy="120"
+              r="105"
               style={{
                 strokeDasharray: circumference,
                 strokeDashoffset: dashOffset,
@@ -112,56 +122,48 @@ function AppShell({ data }: { data: CoreViewModel }): ReactElement {
           </svg>
           <div className="dialContent">
             <time>{formatDuration(snapshot.remainingMs)}</time>
-            <span>{stateLabel(snapshot)}</span>
           </div>
         </div>
-        <div className="actionRow" aria-label="计时控制">
-          <ActionButton label="开始计时（Phase 1）" icon={CirclePlay} />
-          <ActionButton label="暂停计时（Phase 1）" icon={CirclePause} />
-          <ActionButton label="跳到下一轮（Phase 1）" icon={SkipForward} />
-          <ActionButton label="重置当前轮次（Phase 1）" icon={RotateCcw} />
-        </div>
-        <p className="implementationNote">
-          计时控制将在状态机完成后启用。
-        </p>
-      </section>
 
-      <section className="corePanel" aria-label="计时核心状态">
-        <div className="coreRow">
-          <span className="coreIcon input" aria-hidden="true">
-            <Keyboard size={17} />
-          </span>
-          <div>
-            <strong>系统输入</strong>
-            <span>
-              {capabilities.inputMonitoring
-                ? `阈值 ${settings.inputIdleThresholdSeconds} 秒`
-                : "不可用"}
-            </span>
-          </div>
-          <span className="statusDot ready">已连接</span>
+        <div className="roundMeta">
+          <h1 id="round-title">{roundLabel(snapshot.round.kind)}</h1>
+          <span className="metaDivider" aria-hidden="true" />
+          <span>{stateLabel(snapshot)}</span>
         </div>
-        <div className="coreRow">
-          <span className="coreIcon break" aria-hidden="true">
-            <Coffee size={17} />
-          </span>
-          <div>
-            <strong>默认节奏</strong>
-            <span>
-              {settings.focusDurationSeconds / 60} /{" "}
-              {settings.shortBreakDurationSeconds / 60} /{" "}
-              {settings.longBreakDurationSeconds / 60} 分钟
-            </span>
-          </div>
-          <span className="cycleValue">
-            {settings.focusRoundsPerCycle} 轮
-          </span>
+
+        <div className="timerControls" aria-label="计时控制">
+          <IconButton label="重新开始当前轮次（Phase 1）" icon={RotateCcw} />
+          <IconButton
+            label="开始计时（Phase 1）"
+            icon={snapshot.status === "running" ? CirclePause : CirclePlay}
+            className="primary"
+          />
+          <IconButton label="跳到下一轮（Phase 1）" icon={SkipForward} />
         </div>
       </section>
 
-      <footer className="privacyLine">
-        <ShieldCheck size={15} aria-hidden="true" />
-        <span>本地 Core 已就绪，尚未启用摄像头或输入内容采集。</span>
+      <footer className="timerFooter">
+        <span className="roundCount">
+          {snapshot.round.focusRoundNumber ?? settings.focusRoundsPerCycle} /{" "}
+          {settings.focusRoundsPerCycle}
+        </span>
+        <span className="footerDivider" aria-hidden="true" />
+        <button
+          className="textControl"
+          type="button"
+          disabled
+          title="重置当前轮次（Phase 1）"
+        >
+          重置
+        </button>
+        <span className="footerDivider" aria-hidden="true" />
+        <span className="monitorStatus">
+          <Keyboard aria-hidden="true" size={13} strokeWidth={1.8} />
+          {capabilities.inputMonitoring
+            ? `输入检测 · ${settings.inputIdleThresholdSeconds} 秒`
+            : "输入检测不可用"}
+        </span>
+        <IconButton label="音量（Phase 1）" icon={Volume2} className="volumeControl" />
       </footer>
     </main>
   );

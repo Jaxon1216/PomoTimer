@@ -17,7 +17,7 @@ test("starts through the restricted preload bridge and shows Core snapshot", asy
 
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
   await expect(window.getByText("30:00")).toBeVisible();
-  await expect(window.getByText("本地 Core 已就绪")).toBeVisible();
+  await expect(window.getByText("输入检测 · 40 秒")).toBeVisible();
 
   const bridgeShape = await window.evaluate(() => ({
     apiKeys: Object.keys(window.pomodoro).sort(),
