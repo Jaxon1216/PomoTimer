@@ -18,8 +18,8 @@ let mainWindow: BrowserWindow | undefined;
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 400,
-    height: 560,
+    width: 360,
+    height: 478,
     minWidth: 160,
     minHeight: 180,
     show: false,

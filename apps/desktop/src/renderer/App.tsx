@@ -6,15 +6,11 @@ import {
   type ReactElement,
 } from "react";
 import {
-  BarChart3,
-  CirclePause,
-  CirclePlay,
-  Keyboard,
-  RotateCcw,
-  Settings2,
+  Pause,
+  Play,
+  SkipBack,
   SkipForward,
   TimerReset,
-  Volume2,
   type LucideIcon,
 } from "lucide-react";
 import type {
@@ -98,12 +94,12 @@ function primaryAction(snapshot: TimerSnapshot): {
   icon: LucideIcon;
 } {
   if (snapshot.status === "running") {
-    return { command: "pause", label: "暂停计时", icon: CirclePause };
+    return { command: "pause", label: "暂停计时", icon: Pause };
   }
   if (snapshot.status === "idle") {
-    return { command: "start", label: "开始计时", icon: CirclePlay };
+    return { command: "start", label: "开始计时", icon: Play };
   }
-  return { command: "resume", label: "继续计时", icon: CirclePlay };
+  return { command: "resume", label: "继续计时", icon: Play };
 }
 
 function AppShell({
@@ -128,21 +124,16 @@ function AppShell({
       ? Math.max(0, Math.min(1, 1 - snapshot.remainingMs / total))
       : 0;
   }, [snapshot.remainingMs, snapshot.round.totalDurationMs]);
-  const circumference = 2 * Math.PI * 105;
+  const circumference = 2 * Math.PI * 110;
   const dashOffset = circumference * (1 - elapsedPercent);
 
   return (
-    <main className={`timerSurface${compact ? " compact" : ""}`}>
-      <header className="titlebar">
-        <div className="windowStatus">
-          <span className="statusLight" aria-hidden="true" />
-          <span>本地计时</span>
-        </div>
-        <div className="titlebarActions">
-          <IconButton label="统计（即将推出）" icon={BarChart3} disabled />
-          <IconButton label="设置（即将推出）" icon={Settings2} disabled />
-        </div>
-      </header>
+    <main
+      className={`timerSurface round-${snapshot.round.kind}${
+        compact ? " compact" : ""
+      }`}
+    >
+      <header className="titlebar" />
 
       <section className="timerStage" aria-labelledby="round-title">
         <div
@@ -151,13 +142,13 @@ function AppShell({
             snapshot.remainingMs,
           )}，${stateLabel(snapshot)}`}
         >
-          <svg viewBox="0 0 240 240" aria-hidden="true">
-            <circle className="dialTrack" cx="120" cy="120" r="105" />
+          <svg viewBox="0 0 230 230" aria-hidden="true">
+            <circle className="dialTrack" cx="115" cy="115" r="110" />
             <circle
               className="dialProgress"
-              cx="120"
-              cy="120"
-              r="105"
+              cx="115"
+              cy="115"
+              r="110"
               style={{
                 strokeDasharray: circumference,
                 strokeDashoffset: dashOffset,
@@ -171,14 +162,15 @@ function AppShell({
 
         <div className="roundMeta">
           <h1 id="round-title">{roundLabel(snapshot.round.kind)}</h1>
-          <span className="metaDivider" aria-hidden="true" />
-          <span role="status">{commandFeedback ?? stateLabel(snapshot)}</span>
         </div>
+        <span className="srOnly" role="status">
+          {commandFeedback ?? stateLabel(snapshot)}
+        </span>
 
         <div className="timerControls" aria-label="计时控制">
           <IconButton
             label="重新开始当前轮次"
-            icon={RotateCcw}
+            icon={SkipBack}
             disabled={controlsDisabled}
             onClick={() => onCommand("reset")}
           />
@@ -203,7 +195,6 @@ function AppShell({
           {snapshot.round.focusRoundNumber ?? settings.focusRoundsPerCycle} /{" "}
           {settings.focusRoundsPerCycle}
         </span>
-        <span className="footerDivider" aria-hidden="true" />
         <button
           className="textControl"
           type="button"
@@ -213,19 +204,11 @@ function AppShell({
         >
           重置
         </button>
-        <span className="footerDivider" aria-hidden="true" />
-        <span className="monitorStatus">
-          <Keyboard aria-hidden="true" size={13} strokeWidth={1.8} />
+        <span className="srOnly">
           {capabilities.inputMonitoring
-            ? `输入检测 · ${settings.inputIdleThresholdSeconds} 秒`
+            ? `输入检测已连接，闲置阈值 ${settings.inputIdleThresholdSeconds} 秒`
             : "输入检测不可用"}
         </span>
-        <IconButton
-          label="音量（即将推出）"
-          icon={Volume2}
-          className="volumeControl"
-          disabled
-        />
       </footer>
     </main>
   );
@@ -290,7 +273,7 @@ export function App(): ReactElement {
 
   useEffect(() => {
     const updateCompactMode = () => {
-      setCompact(window.innerWidth <= 260 || window.innerHeight <= 310);
+      setCompact(window.innerWidth <= 300 || window.innerHeight <= 390);
     };
     updateCompactMode();
     window.addEventListener("resize", updateCompactMode);

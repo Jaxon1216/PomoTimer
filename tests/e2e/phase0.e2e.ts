@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 import { join } from "node:path";
+import type { PomodoroApi } from "../../apps/desktop/src/shared/contracts";
 
 const desktopDirectory = process.cwd();
 const applicationEntry = join(desktopDirectory, "out", "main", "index.js");
@@ -19,7 +20,10 @@ test("starts through the restricted preload bridge, controls the Core, and suppo
 
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
   await expect(window.getByText("30:00")).toBeVisible();
-  await expect(window.getByText("输入检测 · 40 秒")).toBeVisible();
+  await expect(
+    window.getByRole("button", { name: "重新开始当前轮次" }),
+  ).toBeEnabled();
+  await expect(window.getByRole("button", { name: "跳到下一轮" })).toBeEnabled();
   await window.getByRole("button", { name: "开始计时" }).click();
   await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
 
@@ -33,7 +37,9 @@ test("starts through the restricted preload bridge, controls the Core, and suppo
   await expect(window.getByText("30:00")).toBeVisible();
 
   const bridgeShape = await window.evaluate(() => ({
-    apiKeys: Object.keys(window.pomodoro).sort(),
+    apiKeys: Object.keys(
+      (globalThis as typeof globalThis & { pomodoro: PomodoroApi }).pomodoro,
+    ).sort(),
     hasNodeProcess: typeof process !== "undefined",
     hasRequire: typeof globalThis.require !== "undefined",
   }));

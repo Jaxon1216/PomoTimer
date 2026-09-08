@@ -61,11 +61,13 @@
       }
     ],
     "mac": {
+      "icon": "resources/icons/pomodoro-timer.icns",
       "target": [
         "dmg"
       ]
     },
     "win": {
+      "icon": "resources/icons/pomodoro-timer.ico",
       "target": [
         "nsis"
       ]

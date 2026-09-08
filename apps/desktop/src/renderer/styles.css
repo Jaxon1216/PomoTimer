@@ -1,5 +1,5 @@
 :root {
-  color: #d7e1f4;
+  color: #f6f2eb;
   background: #2f384b;
   font-family: "Avenir Next", "Helvetica Neue", Helvetica, sans-serif;
   font-synthesis: none;
@@ -13,16 +13,14 @@
 html,
 body,
 #root {
-  height: 100%;
   width: 100%;
+  height: 100%;
   min-width: 100%;
   min-height: 0;
   margin: 0;
 }
 
 body {
-  height: 100vh;
-  min-height: 0;
   overflow: hidden;
   background: #2f384b;
 }
@@ -33,19 +31,23 @@ time {
 }
 
 button:focus-visible {
-  outline: 2px solid #f05259;
+  outline: 2px solid #05ec8c;
   outline-offset: 3px;
 }
 
 .timerSurface {
   --surface: #2f384b;
-  --foreground: #d7e1f4;
-  --muted: #a3aec4;
-  --dim: #768399;
-  --track: #3e4a5d;
-  --focus: #b01c2e;
+  --foreground: #f6f2eb;
+  --muted: #c0c9da;
+  --track: #3d4457;
+  --focus: #ff4e4d;
+  --short-break: #05ec8c;
+  --long-break: #0bbddb;
+  --accent: #05ec8c;
+  --round-color: var(--focus);
   position: relative;
   display: flex;
+  width: 100%;
   height: 100%;
   min-height: 0;
   flex-direction: column;
@@ -55,46 +57,28 @@ button:focus-visible {
   animation: surfaceIn 180ms ease-out both;
 }
 
+.timerSurface.round-short-break {
+  --round-color: var(--short-break);
+}
+
+.timerSurface.round-long-break {
+  --round-color: var(--long-break);
+}
+
 .titlebar {
   display: flex;
-  min-height: 44px;
+  min-height: 40px;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 14px 0 76px;
+  justify-content: flex-end;
+  padding: 0 8px 0 76px;
   -webkit-app-region: drag;
 }
 
-.windowStatus,
-.titlebarActions,
 .roundMeta,
 .timerControls,
-.timerFooter,
-.monitorStatus {
+.timerFooter {
   display: flex;
   align-items: center;
-}
-
-.windowStatus {
-  gap: 7px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.statusLight {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  background: #68d2ad;
-  border-radius: 50%;
-  box-shadow: 0 0 0 3px rgba(104, 210, 173, 0.11);
-}
-
-.titlebarActions {
-  gap: 2px;
-  -webkit-app-region: no-drag;
 }
 
 .iconButton {
@@ -109,11 +93,12 @@ button:focus-visible {
   border: 0;
   border-radius: 4px;
   cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease;
 }
 
 .iconButton:not(:disabled):hover {
   color: var(--foreground);
-  background: rgba(227, 232, 241, 0.08);
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 .iconButton:disabled {
@@ -123,20 +108,20 @@ button:focus-visible {
 
 .timerStage {
   display: flex;
+  min-height: 0;
   flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 354px;
-  padding: 4px 28px 0;
+  padding: 6px 24px 4px;
 }
 
 .timerDial {
   position: relative;
-  width: min(238px, 54vh);
-  height: min(238px, 54vh);
-  max-height: 238px;
-  margin: 0 0 18px;
+  width: 220px;
+  height: 220px;
+  flex: 0 0 auto;
+  margin: 0 0 12px;
 }
 
 .timerDial svg {
@@ -154,14 +139,14 @@ button:focus-visible {
 
 .dialTrack {
   stroke: var(--track);
-  stroke-width: 1.6;
+  stroke-width: 2;
 }
 
 .dialProgress {
-  stroke: var(--focus);
-  stroke-width: 8;
+  stroke: var(--round-color);
+  stroke-width: 10;
   stroke-linecap: round;
-  transition: stroke-dashoffset 450ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: stroke 180ms ease, stroke-dashoffset 450ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .dialContent {
@@ -173,57 +158,51 @@ button:focus-visible {
 
 .dialContent time {
   color: var(--foreground);
-  font-family: "SF Mono", "Roboto Mono", "Menlo", monospace;
-  font-size: clamp(39px, 10.5vw, 48px);
-  font-weight: 410;
+  font-family: "SF Mono", "Menlo", "Roboto Mono", monospace;
+  font-size: 45px;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
   line-height: 1;
 }
 
 .roundMeta {
-  min-height: 19px;
-  gap: 9px;
+  min-height: 15px;
   justify-content: center;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.11em;
+  color: var(--round-color);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
 }
 
 .roundMeta h1 {
   margin: 0;
-  color: var(--focus);
+  color: inherit;
   font: inherit;
-  text-transform: uppercase;
-}
-
-.metaDivider,
-.footerDivider {
-  width: 1px;
-  height: 12px;
-  flex: 0 0 auto;
-  background: var(--track);
 }
 
 .timerControls {
   min-height: 48px;
-  gap: 21px;
-  margin-top: 14px;
+  gap: 16px;
+  margin-top: 9px;
 }
 
 .timerControls .iconButton {
-  width: 29px;
-  height: 29px;
+  width: 30px;
+  height: 30px;
   color: var(--muted);
 }
 
 .timerControls .iconButton.primary {
-  width: 45px;
-  height: 45px;
+  width: 48px;
+  height: 48px;
   color: var(--foreground);
-  border: 1.5px solid #aeb8c9;
+  border: 2px solid var(--muted);
   border-radius: 50%;
+}
+
+.timerControls .iconButton.primary:not(:disabled):hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .timerControls .iconButton.primary:disabled {
@@ -231,30 +210,36 @@ button:focus-visible {
 }
 
 .timerFooter {
-  min-height: 48px;
+  min-height: 38px;
   justify-content: center;
   gap: 10px;
-  padding: 7px 18px 15px;
+  padding: 3px 12px 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .roundCount {
-  min-width: 33px;
-  color: var(--foreground);
-  font-family: "SF Mono", "Roboto Mono", "Menlo", monospace;
-  font-size: 11px;
+  min-width: 42px;
+  color: var(--muted);
+  font-family: "SF Mono", "Menlo", "Roboto Mono", monospace;
+  font-size: 12px;
   text-align: center;
 }
 
 .textControl {
-  padding: 3px 2px;
+  padding: 4px 8px;
   color: var(--muted);
   background: transparent;
   border: 0;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.textControl:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 .textControl:disabled {
@@ -262,26 +247,10 @@ button:focus-visible {
   opacity: 0.46;
 }
 
-.monitorStatus {
-  gap: 5px;
-  overflow: hidden;
-  max-width: 134px;
-  color: var(--dim);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.volumeControl {
-  width: 24px;
-  height: 24px;
-  margin-left: -3px;
-  color: var(--muted);
-}
-
 .loadingSurface,
 .failureSurface {
   display: flex;
+  width: 100%;
   height: 100%;
   min-height: 0;
   flex-direction: column;
@@ -294,7 +263,7 @@ button:focus-visible {
 
 .loadingSurface {
   gap: 14px;
-  color: #a3aec4;
+  color: #c0c9da;
   font-size: 13px;
 }
 
@@ -307,7 +276,7 @@ button:focus-visible {
   width: 64px;
   height: 2px;
   overflow: hidden;
-  background: #3e4a5d;
+  background: #3d4457;
 }
 
 .loadingLine::after {
@@ -315,32 +284,40 @@ button:focus-visible {
   width: 28px;
   height: 100%;
   content: "";
-  background: #b01c2e;
+  background: #ff4e4d;
   animation: scan 850ms ease-in-out infinite;
 }
 
 .failureSurface {
-  color: #d7e1f4;
+  color: #f6f2eb;
 }
 
 .failureMark {
-  color: #b01c2e;
+  color: #ff4e4d;
 }
 
 .failureSurface h1 {
   margin: 15px 0 8px;
-  color: #d7e1f4;
+  color: #f6f2eb;
   font-size: 23px;
   font-weight: 550;
-  letter-spacing: 0;
 }
 
 .failureSurface p {
   max-width: 260px;
   margin: 0;
-  color: #a3aec4;
+  color: #c0c9da;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 @keyframes surfaceIn {
@@ -366,65 +343,44 @@ button:focus-visible {
 
 @media (max-width: 380px), (max-height: 500px) {
   .titlebar {
-    min-height: 38px;
-    padding-right: 10px;
+    min-height: 36px;
+    padding-right: 8px;
     padding-left: 66px;
   }
 
-  .timerStage {
-    min-height: 290px;
-    padding-top: 0;
-  }
-
   .timerDial {
-    width: min(206px, 48vh);
-    height: min(206px, 48vh);
-    margin-bottom: 12px;
+    width: min(220px, 48vh);
+    height: min(220px, 48vh);
   }
 
   .timerControls {
-    margin-top: 10px;
+    margin-top: 8px;
   }
 
   .timerFooter {
-    min-height: 42px;
-    padding-bottom: 10px;
+    min-height: 36px;
+    padding-bottom: 6px;
   }
 }
 
 .timerSurface.compact .titlebar {
-  min-height: 30px;
-  padding: 0 7px;
+  min-height: 32px;
+  padding: 0 6px 0 66px;
 }
 
-.timerSurface.compact .windowStatus {
-  gap: 4px;
-  font-size: 8px;
-  letter-spacing: 0.05em;
-}
-
-.timerSurface.compact .statusLight {
-  width: 5px;
-  height: 5px;
-}
-
-.timerSurface.compact .titlebarActions,
-.timerSurface.compact .timerFooter,
-.timerSurface.compact .roundMeta .metaDivider,
-.timerSurface.compact .roundMeta span {
+.timerSurface.compact .timerFooter {
   display: none;
 }
 
 .timerSurface.compact .timerStage {
-  min-height: 0;
-  padding: 0 8px 7px;
+  padding: 0 8px 6px;
 }
 
 .timerSurface.compact .timerDial {
-  width: min(70vw, 58vh);
-  height: min(70vw, 58vh);
-  min-width: 94px;
-  min-height: 94px;
+  width: min(70vw, 49vh);
+  height: min(70vw, 49vh);
+  min-width: 76px;
+  min-height: 76px;
   max-width: 166px;
   max-height: 166px;
   margin: auto 0 5px;
@@ -439,14 +395,13 @@ button:focus-visible {
 }
 
 .timerSurface.compact .roundMeta {
-  min-height: 14px;
+  min-height: 13px;
   font-size: 9px;
-  letter-spacing: 0.08em;
 }
 
 .timerSurface.compact .timerControls {
   min-height: 34px;
-  gap: 14px;
+  gap: 12px;
   margin-top: 5px;
 }
 
@@ -461,15 +416,12 @@ button:focus-visible {
 }
 
 @media (max-width: 190px), (max-height: 220px) {
-  .timerSurface.compact .windowStatus span:last-child,
   .timerSurface.compact .roundMeta {
     display: none;
   }
 
   .timerSurface.compact .timerDial {
-    width: min(76vw, 61vh);
-    height: min(76vw, 61vh);
-    min-width: 76px;
-    min-height: 76px;
+    width: min(72vw, 48vh);
+    height: min(72vw, 48vh);
   }
 }

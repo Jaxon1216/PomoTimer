@@ -1,5 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type {
   Capabilities,
@@ -61,7 +67,22 @@ const runningSnapshot: TimerSnapshot = {
   },
 };
 
+const shortBreakSnapshot: TimerSnapshot = {
+  ...snapshot,
+  revision: 2,
+  round: {
+    ...snapshot.round,
+    kind: "short-break",
+    focusRoundNumber: null,
+    breakMode: "active",
+    totalDurationMs: 300_000,
+  },
+  remainingMs: 300_000,
+};
+
 describe("App", () => {
+  afterEach(cleanup);
+
   beforeEach(() => {
     window.pomodoro = {
       getSnapshot: vi.fn().mockResolvedValue(snapshot),
@@ -73,18 +94,30 @@ describe("App", () => {
     };
   });
 
-  it("renders the Core snapshot in the compact timer shell", async () => {
+  it("renders the Core snapshot in the Pomotroid-style timer shell", async () => {
     render(<App />);
 
     expect(
       await screen.findByRole("heading", { name: "专注" }),
     ).toBeInTheDocument();
     expect(screen.getByText("30:00")).toBeInTheDocument();
-    expect(screen.getByText("本地计时")).toBeInTheDocument();
-    expect(screen.getByText("输入检测 · 40 秒")).toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveClass("round-focus");
     expect(
       screen.getByRole("button", { name: "开始计时" }),
     ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "重新开始当前轮次" }),
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "跳到下一轮" })).toBeEnabled();
+  });
+
+  it("applies the short-break color variant from the Core round kind", async () => {
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue(shortBreakSnapshot);
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "短休" });
+    expect(screen.getByRole("main")).toHaveClass("round-short-break");
   });
 
   it("uses the Core command result as the interactive timer state", async () => {
