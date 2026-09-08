@@ -1,0 +1,397 @@
+:root {
+  color: #152421;
+  background: #eef1e8;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, rgba(21, 36, 33, 0.035) 1px, transparent 1px) 0 0 /
+      30px 30px,
+    #eef1e8;
+}
+
+button,
+time {
+  font: inherit;
+}
+
+.timerSurface {
+  position: relative;
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 28px 28px 22px;
+  background: rgba(246, 247, 241, 0.91);
+  animation: enter 180ms ease-out both;
+}
+
+.timerSurface::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 6px;
+  content: "";
+  background: #d84e35;
+}
+
+.topline,
+.coreRow,
+.privacyLine,
+.actionRow {
+  display: flex;
+  align-items: center;
+}
+
+.topline {
+  justify-content: space-between;
+  color: #2e5047;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brandMark {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  color: #f6f7f1;
+  background: #274b42;
+  border-radius: 5px;
+}
+
+.stageTag {
+  border-bottom: 1px solid #c7d2c8;
+  color: #7a5144;
+  padding-bottom: 3px;
+}
+
+.focusArea {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 312px;
+  text-align: center;
+}
+
+.eyebrow {
+  margin: 0 0 3px;
+  color: #6b756e;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0 0 14px;
+  color: #183f35;
+  font-size: 31px;
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+
+.timerDial {
+  position: relative;
+  width: 192px;
+  height: 192px;
+}
+
+.timerDial svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.dialTrack,
+.dialProgress {
+  fill: none;
+  stroke-width: 5;
+}
+
+.dialTrack {
+  stroke: #d5ded4;
+}
+
+.dialProgress {
+  stroke: #d84e35;
+  stroke-linecap: square;
+  transition: stroke-dashoffset 350ms linear;
+}
+
+.dialContent {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialContent time {
+  color: #173b32;
+  font-family: "SF Mono", "Menlo", monospace;
+  font-size: 34px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.dialContent span {
+  margin-top: 4px;
+  color: #7a5144;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.actionRow {
+  min-height: 44px;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.actionButton {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+  color: #9ca79e;
+  background: transparent;
+  border: 1px solid #d1d8d1;
+  border-radius: 5px;
+  cursor: not-allowed;
+}
+
+.actionButton:focus-visible {
+  outline: 3px solid #d84e35;
+  outline-offset: 2px;
+}
+
+.implementationNote {
+  margin: 1px 0 0;
+  color: #7d8580;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 12px;
+}
+
+.corePanel {
+  border-top: 1px solid #d5ddd4;
+  border-bottom: 1px solid #d5ddd4;
+}
+
+.coreRow {
+  min-height: 68px;
+  gap: 11px;
+}
+
+.coreRow + .coreRow {
+  border-top: 1px solid #e4e8e1;
+}
+
+.coreIcon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 5px;
+}
+
+.coreIcon.input {
+  color: #286b5a;
+  background: #dcebe2;
+}
+
+.coreIcon.break {
+  color: #9a563b;
+  background: #f3e4d9;
+}
+
+.coreRow div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.coreRow strong {
+  color: #263f39;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.coreRow div span {
+  overflow: hidden;
+  color: #747d76;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusDot,
+.cycleValue {
+  flex: 0 0 auto;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.statusDot {
+  color: #216652;
+}
+
+.statusDot::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  content: "";
+  background: #2e9a71;
+  border-radius: 50%;
+  vertical-align: 1px;
+}
+
+.cycleValue {
+  color: #856451;
+}
+
+.privacyLine {
+  gap: 7px;
+  margin-top: 17px;
+  color: #607168;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.loadingSurface,
+.failureSurface {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  text-align: center;
+}
+
+.loadingSurface {
+  gap: 15px;
+  color: #50665d;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 14px;
+}
+
+.loadingSurface p {
+  margin: 0;
+}
+
+.loadingLine {
+  display: block;
+  width: 80px;
+  height: 2px;
+  overflow: hidden;
+  background: #d1dad0;
+}
+
+.loadingLine::after {
+  display: block;
+  width: 36px;
+  height: 100%;
+  content: "";
+  background: #d84e35;
+  animation: scan 950ms ease-in-out infinite;
+}
+
+.failureSurface {
+  color: #583c34;
+  background: #f6f0eb;
+}
+
+.failureMark {
+  color: #bd543d;
+}
+
+.failureSurface h1 {
+  margin: 15px 0 8px;
+  color: #583c34;
+  font-size: 25px;
+}
+
+.failureSurface p {
+  max-width: 250px;
+  margin: 0;
+  color: #806b62;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scan {
+  0%,
+  100% {
+    transform: translateX(-38px);
+  }
+  50% {
+    transform: translateX(80px);
+  }
+}
+
+@media (max-width: 380px) {
+  .timerSurface {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .timerDial {
+    width: 174px;
+    height: 174px;
+  }
+
+  .focusArea {
+    min-height: 288px;
+  }
+}

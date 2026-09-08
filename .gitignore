@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+release/
+playwright-report/
+test-results/
+apps/desktop/resources/core/pomodoro-core*
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+.trae/
+*.tsbuildinfo
