@@ -58,6 +58,7 @@ Create directories only when their phase requires them. Keep application code ou
 - Make asynchronous resource setup cancellable. A stale camera or sidecar initialization must not overwrite newer configuration.
 - Add tests at the state-machine boundary first. Expand to IPC and end-to-end coverage when behavior crosses process or platform boundaries.
 - Use SQLite migrations for every persisted schema change. Migrations are transactional and versioned; do not alter a released schema in place.
+- Follow `docs/code-commenting.md` for substantive Electron, Go, protocol, and persistence comments.
 - Favor small, scoped changes. Do not refactor platform or state-machine code while implementing unrelated UI work.
 
 ## Platform Requirements

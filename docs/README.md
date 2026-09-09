@@ -9,6 +9,8 @@
 3. [进程契约](./contracts.md)：Electron 主进程和 Go 侧车之间的消息、数据模型与恢复规则。
 4. [研究与决策](./research-and-decisions.md)：默认节奏、活动休息、站立模式和摄像头隐私边界的依据。
 5. [路线图](./roadmap.md)：从工程地基到正式发布的分期、质量门和回退方式。
+6. [前端请求流程](./request-flow.md)：从 React 到 Electron、Go 和 SQLite 的当前代码调用顺序。
+7. [代码注释约定](./code-commenting.md)：学习型注释的固定格式和适用范围。
 
 ## 文档权威范围
 

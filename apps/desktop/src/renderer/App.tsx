@@ -221,6 +221,11 @@ export function App(): ReactElement {
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
   const [compact, setCompact] = useState(false);
 
+  // 领域：React / 快照读取
+  // 顺序：读快照链第 1 站：轮询 -> syncSnapshot -> window.pomodoro.getSnapshot -> Preload。
+  // 作用：向 Core 请求最新快照，并把返回值写入本地界面状态。
+  // 原因：剩余时间的权威计算在 Go Core，Renderer 不能自行扣减持久化状态。
+  // 边界：只更新 React 显示状态；不直接调用 Electron、Go 或 SQLite。
   const syncSnapshot = useCallback(async () => {
     const snapshot = await window.pomodoro.getSnapshot();
     setData((current) =>
@@ -228,6 +233,11 @@ export function App(): ReactElement {
     );
   }, []);
 
+  // 领域：React / 计时命令
+  // 顺序：命令链第 1 站：用户点击 -> runCommand -> window.pomodoro.command -> Preload。
+  // 作用：发送开始、暂停、继续、下一轮或重置命令，并用响应快照更新界面。
+  // 原因：按钮等待期间必须禁用，避免并发命令以不确定的顺序到达 Core。
+  // 边界：不决定命令是否合法；Main 和 Go Core 会分别验证调用与状态迁移。
   const runCommand = useCallback(async (command: TimerCommand) => {
     setPendingCommand(command);
     setCommandFeedback(null);
@@ -245,6 +255,11 @@ export function App(): ReactElement {
     }
   }, []);
 
+  // 领域：React / 初始化读取
+  // 顺序：页面加载：App 挂载 -> 并行调用 getSnapshot/getSettings/getCapabilities -> Preload -> Main。
+  // 作用：取得绘制第一个计时界面所需的快照、设置和能力。
+  // 原因：三个只读请求没有先后依赖，可并行缩短首次可用时间。
+  // 边界：settings 和 capabilities 当前由 Main 读取启动握手缓存；只有 snapshot 会再请求 Go。
   useEffect(() => {
     let active = true;
     void Promise.all([
@@ -271,6 +286,11 @@ export function App(): ReactElement {
     };
   }, []);
 
+  // 领域：React / 运行中刷新
+  // 顺序：读快照链循环：running -> 500ms 定时器 -> syncSnapshot -> Preload -> Main -> Go。
+  // 作用：计时运行时定期用 Core 快照刷新界面。
+  // 原因：运行中剩余时间持续变化，但 Core 不需要为每次读取都写 SQLite。
+  // 边界：仅在 running 时轮询；自动化事件订阅将在后续阶段通过 subscribe 实现。
   useEffect(() => {
     const updateCompactMode = () => {
       setCompact(window.innerWidth <= 300 || window.innerHeight <= 390);
