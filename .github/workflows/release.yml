@@ -59,6 +59,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run test:e2e
+        env:
+          DEBUG: pw:api
       - name: Build installer
         run: npm exec --workspace=@pomodoro/desktop -- electron-builder ${{ matrix.builder_args }} --publish never
       - name: Smoke-test packaged application

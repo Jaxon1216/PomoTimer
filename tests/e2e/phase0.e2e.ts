@@ -29,6 +29,7 @@ test("starts through the restricted preload bridge, controls the Core, and suppo
 
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
   await expect(window.getByText("30:00")).toBeVisible();
+  expect(await window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 360, height: 478 });
   await window.waitForTimeout(300);
   await window.screenshot({ path: testInfo.outputPath("timer-light.png") });
   await expect(
@@ -39,10 +40,7 @@ test("starts through the restricted preload bridge, controls the Core, and suppo
   await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
 
   await app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]?.setBounds({
-      width: 160,
-      height: 180,
-    });
+    BrowserWindow.getAllWindows()[0]?.setContentSize(160, 180);
   });
   await expect(window.locator(".timerSurface")).toHaveClass(/compact/);
   await expect(window.locator("time")).toHaveText(/^\d{2}:\d{2}$/);
@@ -61,7 +59,7 @@ test("starts through the restricted preload bridge, controls the Core, and suppo
   await window.getByRole("button", { name: "继续计时" }).click();
 
   await app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]?.setBounds({ width: 360, height: 478 });
+    BrowserWindow.getAllWindows()[0]?.setContentSize(360, 478);
   });
   await window.getByRole("button", { name: "打开设置" }).click();
   await expect(window.getByRole("heading", { name: "设置" })).toBeVisible();

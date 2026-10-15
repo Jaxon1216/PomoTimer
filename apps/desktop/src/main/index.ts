@@ -41,7 +41,15 @@ async function runCommand(command: Parameters<TimerEngine["command"]>[0]): Promi
   if (before.round.kind !== snapshot.round.kind || before.round.cycleNumber !== snapshot.round.cycleNumber || before.round.positionInCycle !== snapshot.round.positionInCycle) notify("轮次完成", `已进入${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"}`);
 }
 function createWindow(): BrowserWindow {
-  const window = new BrowserWindow({ width: 360, height: 478, minWidth: 160, minHeight: 180, show: false, titleBarStyle: "hiddenInset", backgroundColor: "#f6f3ee", webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
+  const window = new BrowserWindow({ width: 360, height: 478, useContentSize: true, autoHideMenuBar: true, show: false, titleBarStyle: "hiddenInset", backgroundColor: "#f6f3ee", webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
+  // 领域：Electron / 窗口布局
+  // 顺序：createWindow -> 读取原生边框尺寸 -> 设置最小窗口 -> Renderer 布局。
+  // 作用：将 160x180 的最小内容区域换算为当前平台的最小外框尺寸。
+  // 原因：Windows 标题栏和边框不能挤占圆环及控制按钮所需的空间。
+  // 边界：仅约束窗口尺寸，不修改计时状态或业务设置。
+  const bounds = window.getBounds();
+  const content = window.getContentBounds();
+  window.setMinimumSize(160 + bounds.width - content.width, 180 + bounds.height - content.height);
   window.setAlwaysOnTop(engine?.settings.alwaysOnTop ?? false);
   window.once("ready-to-show", () => window.show());
   window.on("close", (event) => { if (!quitting && process.platform !== "darwin") { event.preventDefault(); window.hide(); } });
