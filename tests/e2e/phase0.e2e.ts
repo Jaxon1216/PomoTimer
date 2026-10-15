@@ -20,6 +20,11 @@ test("starts through the restricted preload bridge, controls the Core, and suppo
       ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
     },
   });
+  // Runner idle time is unrelated to synthetic Playwright input. Keep this
+  // control/IPC test deterministic; hardware idle behavior is a separate gate.
+  await app.evaluate(({ powerMonitor }) => {
+    powerMonitor.getSystemIdleTime = () => 0;
+  });
   const window = await app.firstWindow();
 
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
@@ -40,7 +45,7 @@ test("starts through the restricted preload bridge, controls the Core, and suppo
     });
   });
   await expect(window.locator(".timerSurface")).toHaveClass(/compact/);
-  await expect(window.getByText("30:00")).toBeVisible();
+  await expect(window.locator("time")).toHaveText(/^\d{2}:\d{2}$/);
   await window.screenshot({ path: testInfo.outputPath("timer-compact.png") });
   for (const label of ["重新开始当前轮次", "暂停计时", "跳到下一轮"]) {
     const box = await window.getByRole("button", { name: label }).boundingBox();

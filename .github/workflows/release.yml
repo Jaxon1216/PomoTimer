@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Package ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            platform: windows
+            arch: x64
+            builder_args: --win nsis --x64
+          - runner: macos-15
+            platform: mac
+            arch: arm64
+            builder_args: --mac dmg --arm64
+          - runner: macos-15-intel
+            platform: mac
+            arch: x64
+            builder_args: --mac dmg --x64
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Check release version
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const root = JSON.parse(readFileSync('package.json', 'utf8'));
+          const desktop = JSON.parse(readFileSync('apps/desktop/package.json', 'utf8'));
+          if (process.env.GITHUB_REF_NAME !== `v${desktop.version}` || root.version !== desktop.version) {
+            throw new Error('The tag and both package versions must match.');
+          }
+          JS
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run test:e2e
+      - name: Build installer
+        run: npm exec --workspace=@pomodoro/desktop -- electron-builder ${{ matrix.builder_args }} --publish never
+      - name: Smoke-test packaged application
+        run: node scripts/smoke-packaged.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/test-results/**
+            apps/desktop/dist/builder-effective-config.yaml
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: release
+          merge-multiple: true
+      - name: Validate installers and prepare release notes
+        run: node scripts/prepare-release.mjs release
+      - name: Upload complete set to a draft release
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft > /tmp/release-draft-state; then
+            test "$(cat /tmp/release-draft-state)" = true || { echo 'Refusing to overwrite a published release'; exit 1; }
+            gh release edit "$GITHUB_REF_NAME" --notes-file release/RELEASE_NOTES.md
+            gh release upload "$GITHUB_REF_NAME" release/*.dmg release/*.exe release/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/*.dmg release/*.exe release/SHA256SUMS \
+              --verify-tag --draft --prerelease --title "Pomodot $GITHUB_REF_NAME" \
+              --notes-file release/RELEASE_NOTES.md
+          fi
+      - name: Publish prerelease
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --latest=false
