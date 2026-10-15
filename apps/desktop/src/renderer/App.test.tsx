@@ -150,7 +150,34 @@ describe("App", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "未连接到计时核心" }),
+      await screen.findByRole("heading", { name: "计时核心不可用" }),
     ).toBeInTheDocument();
+  });
+
+  it("updates a system theme when the operating system theme changes", async () => {
+    let matches = false;
+    let listener: (() => void) | undefined;
+    window.matchMedia = vi.fn(() => ({
+      get matches() {
+        return matches;
+      },
+      media: "(prefers-color-scheme: dark)",
+      onchange: null,
+      addEventListener: (_type: string, callback: () => void) => {
+        listener = callback;
+      },
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    expect(document.documentElement).not.toHaveClass("dark");
+
+    matches = true;
+    listener?.();
+    expect(document.documentElement).toHaveClass("dark");
   });
 });

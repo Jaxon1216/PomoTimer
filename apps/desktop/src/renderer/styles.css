@@ -1,9 +1,44 @@
+@font-face {
+  font-family: MonaSans;
+  src: url("./assets/MonaSansVF.woff2") format("woff2");
+  font-weight: 100 900;
+}
+
+@font-face {
+  font-family: MonaMono;
+  src: url("./assets/MonaSansMonoVF.woff2") format("woff2");
+  font-weight: 100 900;
+}
+
 :root {
-  color: #f6f2eb;
-  background: #2f384b;
-  font-family: "Avenir Next", "Helvetica Neue", Helvetica, sans-serif;
+  font-family: MonaSans, "Avenir Next", sans-serif;
+  color: #242321;
+  background: #f4f1eb;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  --surface: #f4f1eb;
+  --surface-raised: #fffdfa;
+  --foreground: #242321;
+  --muted: #817d76;
+  --faint: #aaa69e;
+  --track: #e2ded6;
+  --line: #ded9d0;
+  --focus: #e4584f;
+  --short: #229d74;
+  --long: #3398a8;
+  --accent: #e4584f;
+  --shadow: 0 12px 34px #29251d0d;
+}
+
+:root.dark {
+  --surface: #252b39;
+  --surface-raised: #2e3545;
+  --foreground: #f6f2eb;
+  --muted: #bbc2ce;
+  --faint: #838b9b;
+  --track: #3c4558;
+  --line: #414a5b;
+  --shadow: 0 12px 34px #0003;
 }
 
 * {
@@ -22,29 +57,28 @@ body,
 
 body {
   overflow: hidden;
-  background: #2f384b;
+  background: var(--surface);
 }
 
 button,
-time {
+input,
+select {
   font: inherit;
 }
 
-button:focus-visible {
-  outline: 2px solid #05ec8c;
-  outline-offset: 3px;
+button {
+  color: inherit;
 }
 
-.timerSurface {
-  --surface: #2f384b;
-  --foreground: #f6f2eb;
-  --muted: #c0c9da;
-  --track: #3d4457;
-  --focus: #ff4e4d;
-  --short-break: #05ec8c;
-  --long-break: #0bbddb;
-  --accent: #05ec8c;
-  --round-color: var(--focus);
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.timerSurface,
+.pageSurface {
   position: relative;
   display: flex;
   width: 100%;
@@ -54,56 +88,58 @@ button:focus-visible {
   overflow: hidden;
   color: var(--foreground);
   background: var(--surface);
-  animation: surfaceIn 180ms ease-out both;
-}
-
-.timerSurface.round-short-break {
-  --round-color: var(--short-break);
-}
-
-.timerSurface.round-long-break {
-  --round-color: var(--long-break);
+  animation: in 0.18s ease-out both;
 }
 
 .titlebar {
   display: flex;
-  min-height: 40px;
+  min-height: 48px;
   align-items: center;
-  justify-content: flex-end;
-  padding: 0 8px 0 76px;
+  justify-content: space-between;
+  padding: 0 12px 0 18px;
   -webkit-app-region: drag;
 }
 
-.roundMeta,
-.timerControls,
-.timerFooter {
+.brand {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.16em;
+}
+
+.brand span {
+  color: var(--accent);
+}
+
+.titleActions {
   display: flex;
-  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
 }
 
 .iconButton {
   display: inline-grid;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   flex: 0 0 auto;
   place-items: center;
   padding: 0;
   color: var(--muted);
   background: transparent;
   border: 0;
-  border-radius: 4px;
+  border-radius: 7px;
   cursor: pointer;
-  transition: color 150ms ease, background-color 150ms ease;
+  transition: 0.15s;
 }
 
 .iconButton:not(:disabled):hover {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
 }
 
 .iconButton:disabled {
   cursor: not-allowed;
-  opacity: 0.46;
+  opacity: 0.4;
 }
 
 .timerStage {
@@ -113,7 +149,7 @@ button:focus-visible {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 6px 24px 4px;
+  padding: 0 24px 4px;
 }
 
 .timerDial {
@@ -121,14 +157,13 @@ button:focus-visible {
   width: 220px;
   height: 220px;
   flex: 0 0 auto;
-  margin: 0 0 12px;
+  margin: 0 0 10px;
 }
 
 .timerDial svg {
   display: block;
   width: 100%;
   height: 100%;
-  overflow: visible;
   transform: rotate(-90deg);
 }
 
@@ -143,10 +178,18 @@ button:focus-visible {
 }
 
 .dialProgress {
-  stroke: var(--round-color);
+  stroke: var(--round-color, var(--focus));
   stroke-width: 10;
   stroke-linecap: round;
-  transition: stroke 180ms ease, stroke-dashoffset 450ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: stroke 0.18s, stroke-dashoffset 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.round-short-break {
+  --round-color: var(--short);
+}
+
+.round-long-break {
+  --round-color: var(--long);
 }
 
 .dialContent {
@@ -157,42 +200,93 @@ button:focus-visible {
 }
 
 .dialContent time {
-  color: var(--foreground);
-  font-family: "SF Mono", "Menlo", "Roboto Mono", monospace;
-  font-size: 45px;
-  font-weight: 400;
+  font-family: MonaMono, "SF Mono", monospace;
+  font-size: 44px;
+  font-weight: 450;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.08em;
   line-height: 1;
 }
 
 .roundMeta {
-  min-height: 15px;
+  display: flex;
+  min-height: 45px;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  color: var(--round-color);
-  font-size: 12px;
-  font-weight: 650;
-  text-transform: uppercase;
+  gap: 2px;
 }
 
 .roundMeta h1 {
   margin: 0;
-  color: inherit;
-  font: inherit;
+  color: var(--round-color, var(--focus));
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.eyebrow {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.breakMode {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.statePill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stateDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--round-color, var(--focus));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--round-color, var(--focus)) 14%, transparent);
+}
+
+.state-auto-paused .stateDot {
+  background: #d79543;
+  box-shadow: 0 0 0 3px #d7954322;
+}
+
+.state-manual-paused .stateDot {
+  background: var(--muted);
+  box-shadow: 0 0 0 3px #8883;
+}
+
+.monitorStatus {
+  min-height: 15px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .timerControls {
-  min-height: 48px;
-  gap: 16px;
+  display: flex;
+  min-height: 50px;
+  align-items: center;
+  gap: 17px;
   margin-top: 9px;
 }
 
 .timerControls .iconButton {
   width: 30px;
   height: 30px;
-  color: var(--muted);
 }
 
-.timerControls .iconButton.primary {
+.timerControls .primary {
   width: 48px;
   height: 48px;
   color: var(--foreground);
@@ -200,51 +294,504 @@ button:focus-visible {
   border-radius: 50%;
 }
 
-.timerControls .iconButton.primary:not(:disabled):hover {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.timerControls .iconButton.primary:disabled {
-  opacity: 0.46;
+.timerControls .primary:not(:disabled):hover {
+  color: var(--round-color, var(--accent));
+  border-color: var(--round-color, var(--accent));
 }
 
 .timerFooter {
-  min-height: 38px;
+  display: flex;
+  min-height: 42px;
+  align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 3px 12px 7px;
+  gap: 11px;
+  padding: 3px 14px 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .roundCount {
-  min-width: 42px;
-  color: var(--muted);
-  font-family: "SF Mono", "Menlo", "Roboto Mono", monospace;
+  font-family: MonaMono, monospace;
   font-size: 12px;
-  text-align: center;
+}
+
+.roundCount small {
+  color: var(--faint);
+  font-family: MonaSans, sans-serif;
+}
+
+.footerHint {
+  color: var(--faint);
+  font-size: 10px;
 }
 
 .textControl {
-  padding: 4px 8px;
+  padding: 5px 8px;
   color: var(--muted);
   background: transparent;
   border: 0;
-  border-radius: 4px;
+  border-radius: 5px;
   cursor: pointer;
-  font-size: 12px;
-  transition: color 150ms ease, background-color 150ms ease;
+  font-size: 11px;
 }
 
-.textControl:not(:disabled):hover {
+.textControl:hover {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 
-.textControl:disabled {
-  cursor: not-allowed;
-  opacity: 0.46;
+.compact .titlebar {
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.compact .brand {
+  font-size: 9px;
+}
+
+.compact .timerStage {
+  justify-content: space-evenly;
+  padding: 0 7px 2px;
+}
+
+.compact .timerDial {
+  width: min(70vw, calc(100vh - 126px));
+  height: min(70vw, calc(100vh - 126px));
+  min-width: 54px;
+  min-height: 54px;
+  max-width: 166px;
+  max-height: 166px;
+  margin: 0 auto 2px;
+}
+
+.compact .dialProgress {
+  stroke-width: 7;
+}
+
+.compact .dialContent time {
+  font-size: clamp(18px, 14vw, 34px);
+}
+
+.compact .roundMeta {
+  min-height: 26px;
+}
+
+.compact .roundMeta h1 {
+  font-size: 12px;
+}
+
+.compact .eyebrow,
+.compact .breakMode,
+.compact .monitorStatus,
+.compact .timerFooter {
+  display: none;
+}
+
+.compact .statePill {
+  margin-top: 2px;
+  font-size: 10px;
+}
+
+.compact .timerControls {
+  min-height: 36px;
+  gap: 11px;
+  margin-top: 2px;
+}
+
+.compact .timerControls .iconButton {
+  width: 25px;
+  height: 25px;
+}
+
+.compact .timerControls .primary {
+  width: 36px;
+  height: 36px;
+}
+
+.pageHeader {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pageHeader h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.backButton {
+  position: absolute;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 7px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.backButton:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.headerSpacer {
+  position: absolute;
+  right: 14px;
+}
+
+.settingsScroll,
+.statsScroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 20px 22px 12px;
+}
+
+.settingsSection {
+  padding: 0 0 20px;
+  margin-bottom: 19px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settingsSection h2,
+.statsSection h2 {
+  margin: 0 0 12px;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.settingGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 10px;
+}
+
+.settingGrid label,
+.wideSetting {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.settingGrid input,
+.settingGrid select,
+.wideSetting input {
+  width: 100%;
+  padding: 8px 9px;
+  color: var(--foreground);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.settingGrid small,
+.wideSetting small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.wideSetting {
+  width: 50%;
+}
+
+.segmented {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.segmented span {
+  margin-right: auto;
+}
+
+.segmented button,
+.themeChoices button {
+  padding: 7px 9px;
+  color: var(--muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.segmented button.selected,
+.themeChoices button.selected {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-raised));
+}
+
+.infoNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 13px 0 0;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.themeChoices {
+  display: flex;
+  gap: 6px;
+}
+
+.themeChoices button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.toggleRow input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.settingsFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 22px 15px;
+}
+
+.saveHint {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.saveButton {
+  padding: 8px 14px;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 25%, transparent);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.saveButton:hover {
+  filter: brightness(1.06);
+}
+
+.statsHero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 2px 23px;
+}
+
+.statsHero span,
+.statsHero em {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.statsHero strong {
+  display: block;
+  margin: 5px 0;
+  color: var(--foreground);
+  font-family: MonaMono, monospace;
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: -0.08em;
+}
+
+.statsHero strong small {
+  font-family: MonaSans, sans-serif;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.todayRing {
+  position: relative;
+  display: grid;
+  width: 70px;
+  height: 70px;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) var(--progress, 0%), var(--track) 0);
+  transform: rotate(35deg);
+}
+
+.todayRing::before {
+  position: absolute;
+  inset: 7px;
+  border-radius: 50%;
+  background: var(--surface);
+  content: "";
+}
+
+.todayRing span {
+  position: relative;
+  z-index: 1;
+  color: var(--accent);
+  font-family: MonaMono, monospace;
+  font-size: 11px;
+  transform: rotate(-35deg);
+}
+
+.statsSection {
+  padding: 15px 0 18px;
+  border-top: 1px solid var(--line);
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.sectionTitle h2 {
+  margin: 0;
+}
+
+.sectionTitle span {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.weekBars {
+  display: flex;
+  height: 112px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 13px;
+}
+
+.weekDay {
+  display: flex;
+  height: 100%;
+  min-width: 22px;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.barWrap {
+  display: flex;
+  width: 100%;
+  height: 72px;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.bar {
+  width: 12px;
+  min-height: 3px;
+  background: var(--accent);
+  border-radius: 4px 4px 2px 2px;
+}
+
+.weekDay b {
+  color: var(--muted);
+  font-family: MonaMono, monospace;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.weekDay small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.heatmapFrame {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 6px;
+  padding-top: 13px;
+  overflow-x: auto;
+}
+
+.heatmapWeekdays {
+  display: grid;
+  grid-template-rows: repeat(7, 12px);
+  gap: 4px;
+  color: var(--faint);
+  font-size: 8px;
+  line-height: 12px;
+  text-align: center;
+}
+
+.heatmap {
+  display: grid;
+  min-width: max-content;
+  grid-auto-flow: column;
+  grid-auto-columns: 12px;
+  grid-template-rows: repeat(7, 12px);
+  gap: 4px;
+}
+
+.heatmap span {
+  width: 12px;
+  height: 12px;
+  background: var(--track);
+  border-radius: 2px;
+}
+
+.heatmap .heat-empty {
+  background: transparent;
+}
+
+.heatmap .heat-1 {
+  background: color-mix(in srgb, var(--accent) 25%, var(--track));
+}
+
+.heatmap .heat-2 {
+  background: color-mix(in srgb, var(--accent) 42%, var(--track));
+}
+
+.heatmap .heat-3 {
+  background: color-mix(in srgb, var(--accent) 60%, var(--track));
+}
+
+.heatmap .heat-4 {
+  background: color-mix(in srgb, var(--accent) 78%, var(--track));
+}
+
+.heatmap .heat-5 {
+  background: var(--accent);
+}
+
+.emptyState {
+  margin: 15px 0;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
 }
 
 .loadingSurface,
@@ -256,19 +803,25 @@ button:focus-visible {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 12px;
   padding: 28px;
-  background: #2f384b;
+  color: var(--muted);
+  background: var(--surface);
   text-align: center;
 }
 
-.loadingSurface {
-  gap: 14px;
-  color: #c0c9da;
-  font-size: 13px;
+.failureSurface h1 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 20px;
 }
 
-.loadingSurface p {
+.failureSurface p {
+  max-width: 260px;
   margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .loadingLine {
@@ -276,55 +829,24 @@ button:focus-visible {
   width: 64px;
   height: 2px;
   overflow: hidden;
-  background: #3d4457;
+  background: var(--track);
 }
 
 .loadingLine::after {
   display: block;
   width: 28px;
   height: 100%;
+  background: var(--accent);
   content: "";
-  background: #ff4e4d;
-  animation: scan 850ms ease-in-out infinite;
+  animation: scan 0.85s ease-in-out infinite;
 }
 
-.failureSurface {
-  color: #f6f2eb;
-}
-
-.failureMark {
-  color: #ff4e4d;
-}
-
-.failureSurface h1 {
-  margin: 15px 0 8px;
-  color: #f6f2eb;
-  font-size: 23px;
-  font-weight: 550;
-}
-
-.failureSurface p {
-  max-width: 260px;
-  margin: 0;
-  color: #c0c9da;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-@keyframes surfaceIn {
+@keyframes in {
   from {
     opacity: 0;
     transform: scale(0.987);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -336,92 +858,14 @@ button:focus-visible {
   100% {
     transform: translateX(-28px);
   }
+
   50% {
     transform: translateX(64px);
   }
 }
 
-@media (max-width: 380px), (max-height: 500px) {
+@media (max-width: 300px), (max-height: 390px) {
   .titlebar {
-    min-height: 36px;
-    padding-right: 8px;
-    padding-left: 66px;
-  }
-
-  .timerDial {
-    width: min(220px, 48vh);
-    height: min(220px, 48vh);
-  }
-
-  .timerControls {
-    margin-top: 8px;
-  }
-
-  .timerFooter {
-    min-height: 36px;
-    padding-bottom: 6px;
-  }
-}
-
-.timerSurface.compact .titlebar {
-  min-height: 32px;
-  padding: 0 6px 0 66px;
-}
-
-.timerSurface.compact .timerFooter {
-  display: none;
-}
-
-.timerSurface.compact .timerStage {
-  padding: 0 8px 6px;
-}
-
-.timerSurface.compact .timerDial {
-  width: min(70vw, 49vh);
-  height: min(70vw, 49vh);
-  min-width: 76px;
-  min-height: 76px;
-  max-width: 166px;
-  max-height: 166px;
-  margin: auto 0 5px;
-}
-
-.timerSurface.compact .dialProgress {
-  stroke-width: 7;
-}
-
-.timerSurface.compact .dialContent time {
-  font-size: clamp(22px, 14vw, 34px);
-}
-
-.timerSurface.compact .roundMeta {
-  min-height: 13px;
-  font-size: 9px;
-}
-
-.timerSurface.compact .timerControls {
-  min-height: 34px;
-  gap: 12px;
-  margin-top: 5px;
-}
-
-.timerSurface.compact .timerControls .iconButton {
-  width: 24px;
-  height: 24px;
-}
-
-.timerSurface.compact .timerControls .iconButton.primary {
-  width: 34px;
-  height: 34px;
-}
-
-@media (max-width: 190px), (max-height: 220px) {
-  .timerSurface.compact .roundMeta {
-    display: none;
-  }
-
-  .timerSurface.compact .timerDial {
-    width: min(72vw, 48vh);
-    height: min(72vw, 48vh);
+    min-height: 34px;
   }
 }
