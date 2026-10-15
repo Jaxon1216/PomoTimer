@@ -1,36 +1,14 @@
 # 番茄钟设计文档
 
-本文档集定义 Pomodoro Timer 的产品行为和实现边界。仓库已初始化工程地基，并实现了首批 Phase 1 交互：受限 Electron IPC、Go Core 初始化握手、SQLite 迁移，以及开始、暂停、继续、下一步和重置命令可用于开发验证；输入自动化、两种休息策略、统计、托盘和设置仍按路线图继续交付。
+本文档集描述本项目当前的 Electron 主进程计时实现和 Phase 1 产品边界。
 
-## 阅读顺序
+阅读顺序：
 
-1. [产品规格](./product-spec.md)：用户可见行为、默认值、状态转换和验收标准。
-2. [技术架构](./architecture.md)：Electron、React、Go、SQLite 和平台适配的职责。
-3. [进程契约](./contracts.md)：Electron 主进程和 Go 侧车之间的消息、数据模型与恢复规则。
-4. [研究与决策](./research-and-decisions.md)：默认节奏、活动休息、站立模式和摄像头隐私边界的依据。
-5. [路线图](./roadmap.md)：从工程地基到正式发布的分期、质量门和回退方式。
-6. [前端请求流程](./request-flow.md)：从 React 到 Electron、Go 和 SQLite 的当前代码调用顺序。
-7. [代码注释约定](./code-commenting.md)：学习型注释的固定格式和适用范围。
+1. [产品规格](./product-spec.md)：用户行为、默认值、规则和验收标准。
+2. [技术架构](./architecture.md)：Main、preload、React、TimerEngine 和 SQLite 的职责。
+3. [IPC 与持久化契约](./contracts.md)：运行时 schema、事件和数据库模型。
+4. [研究与决策](./research-and-decisions.md)：默认节奏、活动休息和隐私边界。
+5. [路线图](./roadmap.md)：阶段范围和发布门。
+6. [前端请求流程](./request-flow.md)：当前真实调用链。
 
-## 文档权威范围
-
-| 文档 | 权威范围 | 主要读者 |
-| --- | --- | --- |
-| `product-spec.md` | 用户体验、状态和验收标准 | 产品、设计、测试、开发 |
-| `architecture.md` | 进程边界、技术栈、平台集成 | Electron、React、Go 开发者 |
-| `contracts.md` | JSON-RPC、类型、SQLite 模型、错误与恢复 | Electron/Go 开发者、测试 |
-| `research-and-decisions.md` | 设计依据、已排除方案、健康与隐私边界 | 产品、设计、评审者 |
-| `roadmap.md` | 阶段范围、依赖、发布门槛 | 项目负责人、开发、测试 |
-
-项目级工程约束位于仓库根目录 [AGENTS.md](../AGENTS.md)。
-
-## 固定原则
-
-- 首发支持 macOS 和 Windows，且应用完全本地离线。
-- Go 侧车是计时、设置、统计和持久化的唯一权威。
-- 默认周期为 `30/5/30/5/30/10`，所有时长可在设置中调整。
-- 输入监测只处理距最近系统输入的秒数；摄像头功能后续以可选的本地人脸在场检测实现。
-- 不记录按键、鼠标位置、活动窗口、屏幕内容、视频帧或生物特征。
-- 人脸存在不等于真实活动、身份确认或反照片/视频攻击活检。
-
-修改用户行为、跨进程消息或数据库模型时，必须同步更新相应文档及其测试。
+固定原则：本地离线、macOS/Windows 首发、默认 `30/5/30/5/30/10`、输入只传递闲置秒数、不记录敏感输入或相机内容、完成专注才统计、失败检测不伪造可靠 presence。

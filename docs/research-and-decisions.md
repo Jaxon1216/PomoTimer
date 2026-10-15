@@ -111,7 +111,7 @@ Electron `powerMonitor` 提供系统闲置时间与电源事件，是跨平台�
 
 不可直接采用的点：
 
-- 该项目使用 Tauri、Rust 和 Svelte，本项目使用 Electron、Go 和 React。
+- 该项目使用 Tauri、Rust 和 Svelte，本项目复用其视觉规范但使用 Electron、TypeScript 和 React。
 - 其已查看实现对非 macOS 的系统闲置时间返回“始终活跃”占位值；本项目首发 Windows，不能保留这个缺口。
 - 其人脸检测是“脸是否存在”的实现，不应被扩展为强活体检测或活动量判定。
 

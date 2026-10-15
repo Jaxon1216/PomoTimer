@@ -4,17 +4,17 @@
 
 ## 固定格式
 
-对于 Electron、Go、协议和持久化中需要额外说明的代码块，使用以下五行格式：
+对于 Electron、TypeScript 状态机、IPC 和持久化中需要额外说明的代码块，使用以下五行格式：
 
 ```ts
 // 领域：Electron / 主进程
-// 顺序：命令链第 3 站，Preload -> Main IPC -> Go Sidecar。
+// 顺序：命令链第 3 站，Preload -> Main IPC -> TimerEngine。
 // 作用：创建并管理原生窗口。
 // 原因：窗口和系统 API 只能由主进程访问。
 // 边界：Renderer 只能通过 preload 暴露的 API 请求操作。
 ```
 
-- `领域`：写明技术层和主题，例如 `Electron / Preload`、`Go / 状态机`、`Go / SQLite`。
+- `领域`：写明技术层和主题，例如 `Electron / Preload`、`Electron / IPC`、`Timer / 状态机`、`SQLite / 迁移`。
 - `顺序`：写明它在启动链、命令链、读快照链或错误返回链中的位置，并列出直接的上游和下游。跨进程代码使用 `第 N 站`；Core 内部辅助函数写明调用它的函数和下一步。
 - `作用`：说明这段代码完成的行为。
 - `原因`：说明不直接显而易见的设计、可靠性或安全原因。
@@ -22,26 +22,26 @@
 
 每个字段单独一行，使用全角冒号。不要省略字段；若某项没有特殊内容，仍写出当前约束。完整流程可查阅 `docs/request-flow.md`，但代码注释中的 `顺序` 必须足以直接跟到下一站。
 
-## Go 的额外规则
+## TypeScript 的额外规则
 
-导出的 Go 标识符使用 Go Doc 的首句，且首个单词必须是标识符名称；随后再写固定格式。例如：
+导出的 TimerEngine、Store 和 IPC 类型使用清晰的首句说明；随后再写固定格式。例如：
 
-```go
-// Server 是 Core 的请求分发器和计时状态机。
+```ts
+// TimerEngine 是应用唯一的确定性计时状态机。
 //
-// 领域：Go / 状态机
-// 顺序：命令链第 6 站，协议入口 -> Server.Handle -> 状态迁移。
-// 作用：处理 JSON-RPC 请求并保存唯一的计时状态。
+// 领域：Timer / 状态机
+// 顺序：命令链第 4 站，Main IPC -> TimerEngine -> SqliteStore。
+// 作用：处理显式命令、自动策略和唯一的计时状态。
 // 原因：计时不能依赖 Renderer 的本地状态。
 // 边界：不访问 Electron API，也不直接读取系统输入或摄像头。
-type Server struct {
+class TimerEngine {
     // ...
 }
 ```
 
 ## 何时写注释
 
-- 跨进程调用、IPC 校验、子进程生命周期和安全配置。
+- IPC 校验、Electron 生命周期和安全配置。
 - 状态迁移、崩溃恢复、时间计算和数据库迁移。
 - 代码的名字无法表达的产品规则或失败策略。
 
