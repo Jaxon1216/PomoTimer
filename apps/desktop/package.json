@@ -2,20 +2,22 @@
   "name": "@pomodoro/desktop",
   "version": "0.1.0",
   "description": "A local-first desktop focus timer.",
+  "author": "Easton",
   "private": true,
   "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "npm run build:core && electron-vite dev",
-    "build": "npm run build:core && electron-vite build",
-    "build:core": "node ../../scripts/build-core.mjs",
+    "dev": "npm run rebuild:native && electron-vite dev",
+    "build": "electron-vite build",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run",
-    "test:e2e": "npm run build && playwright test",
-    "package": "npm run build && electron-builder"
+    "test:e2e": "npm run build && npm run rebuild:native && playwright test",
+    "package": "npm run build && electron-builder",
+    "rebuild:native": "electron-builder install-app-deps"
   },
   "dependencies": {
+    "better-sqlite3": "^12.4.1",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -28,6 +30,7 @@
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@types/node": "^22.10.2",
+    "@types/better-sqlite3": "^7.6.12",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.1",
     "@vitejs/plugin-react": "^4.3.4",
@@ -53,12 +56,17 @@
     ],
     "extraResources": [
       {
-        "from": "resources/core",
-        "to": "core",
+        "from": "resources/icons",
+        "to": "icons",
         "filter": [
-          "**/*"
+          "pomodoro-timer.icns",
+          "pomodoro-timer.ico",
+          "pomodoro-timer.png"
         ]
       }
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
     ],
     "mac": {
       "icon": "resources/icons/pomodoro-timer.icns",

@@ -88,6 +88,12 @@ describe("App", () => {
       getSnapshot: vi.fn().mockResolvedValue(snapshot),
       getSettings: vi.fn().mockResolvedValue(settings),
       getCapabilities: vi.fn().mockResolvedValue(capabilities),
+      getStatistics: vi.fn().mockResolvedValue({
+        generatedAt: "2026-09-08T09:00:00.000Z",
+        today: { localDate: "2026-09-08", completedFocusMinutes: 0, completedFocusRounds: 0 },
+        week: [],
+        heatmap: [],
+      }),
       command: vi.fn(),
       updateSettings: vi.fn(),
       subscribe: vi.fn(() => () => undefined),

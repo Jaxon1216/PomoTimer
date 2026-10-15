@@ -48,6 +48,7 @@ test("starts through the restricted preload bridge, controls the Core, and suppo
     "getCapabilities",
     "getSettings",
     "getSnapshot",
+    "getStatistics",
     "subscribe",
     "updateSettings",
   ]);

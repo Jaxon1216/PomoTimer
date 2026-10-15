@@ -1,152 +1,116 @@
 import { join } from "node:path";
-import {
-  app,
-  BrowserWindow,
-  ipcMain,
-  shell,
-  type IpcMainInvokeEvent,
-} from "electron";
-import {
-  capabilitiesSchema,
-  settingsPatchSchema,
-  timerCommandSchema,
-} from "../shared/contracts.js";
-import { CoreSupervisor } from "./sidecar.js";
+import { pathToFileURL } from "node:url";
+import { app, BrowserWindow, dialog, Menu, Notification, nativeImage, powerMonitor, Tray, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { capabilitiesSchema, coreEventSchema, settingsPatchSchema, settingsSchema, statisticsSnapshotSchema, timerCommandSchema, timerSnapshotSchema, type CoreEvent } from "../shared/contracts.js";
+import { SqliteStore } from "./store.js";
+import { TimerEngine } from "./timer.js";
 
-// 领域：Electron / 主进程
-// 顺序：启动链中由 Main 创建；命令链第 3 站由 IPC 处理器调用 CoreSupervisor。
-// 作用：保存 Go Core 的唯一监督器和当前主窗口引用。
-// 原因：主进程拥有原生资源，不能由多个 Renderer 分别创建或管理。
-// 边界：Renderer 不直接访问 Core，也不持有 BrowserWindow。
-const core = new CoreSupervisor();
 let mainWindow: BrowserWindow | undefined;
+let tray: Tray | undefined;
+let store: SqliteStore | undefined;
+let engine: TimerEngine | undefined;
+let monitorTimer: NodeJS.Timeout | undefined;
+let tickTimer: NodeJS.Timeout | undefined;
+let quitting = false;
+let lastRoundKey = "";
 
-// 领域：Electron / 主进程
-// 顺序：启动链末尾：Core 初始化完成 -> createWindow -> Renderer App。
-// 作用：创建加载 React Renderer 的原生应用窗口。
-// 原因：窗口安全选项需要在创建时一次性确定，避免页面获得 Node 或 Electron 特权。
-// 边界：此函数只配置窗口和导航规则，不处理计时业务。
+const capabilities = capabilitiesSchema.parse({ inputMonitoring: process.platform === "darwin" || process.platform === "win32", cameraPresence: false, standingFocus: false });
+
+function assertSender(event: IpcMainInvokeEvent): void { if (event.sender.id !== mainWindow?.webContents.id) throw new Error("不支持的 IPC 调用来源"); }
+function currentEngine(): TimerEngine { if (!engine) throw new Error("计时核心尚未初始化"); return engine; }
+function formatRemaining(ms: number): string { const seconds = Math.ceil(ms / 1000); return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`; }
+function broadcast(event: CoreEvent): void { const safe = coreEventSchema.parse(event); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("pomodoro:event", safe); updateTray(); }
+function currentDate(): string { return new Date().toLocaleDateString("sv-SE"); }
+function dateAtOffset(days: number): string { const date = new Date(); date.setHours(12, 0, 0, 0); date.setDate(date.getDate() + days); return date.toLocaleDateString("sv-SE"); }
+function statistics() {
+  if (!store) throw new Error("数据库尚未初始化");
+  const today = currentDate(); const now = new Date(); const mondayOffset = (now.getDay() + 6) % 7; const start = dateAtOffset(-mondayOffset); const weekRows = store.dailyTotals(start, dateAtOffset(6 - mondayOffset));
+  const week = Array.from({ length: 7 }, (_, index) => { const date = dateAtOffset(index - mondayOffset); return weekRows.find((row) => row.localDate === date) ?? { localDate: date, completedFocusMinutes: 0, completedFocusRounds: 0 }; });
+  const heatmapRows = store.dailyTotals(dateAtOffset(-364), today); const heatmap = Array.from({ length: 365 }, (_, index) => { const localDate = dateAtOffset(index - 364); return heatmapRows.find((row) => row.localDate === localDate) ?? { localDate, completedFocusMinutes: 0, completedFocusRounds: 0 }; });
+  return statisticsSnapshotSchema.parse({ generatedAt: new Date().toISOString(), today: store.dailyTotals(today, today)[0] ?? { localDate: today, completedFocusMinutes: 0, completedFocusRounds: 0 }, week, heatmap });
+}
+function publishSnapshot(): void { const snapshot = currentEngine().snapshot; broadcast({ type: "timer.snapshot", snapshot }); }
+function notify(title: string, body: string): void { if (currentEngine().settings.notificationsEnabled && Notification.isSupported()) new Notification({ title, body }).show(); }
+function updateTray(): void {
+  if (!tray || !engine) return;
+  const snapshot = engine.snapshot; const action = snapshot.status === "running" ? "暂停" : snapshot.status === "idle" ? "开始" : "继续";
+  tray.setContextMenu(Menu.buildFromTemplate([{ label: `${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"} · ${formatRemaining(snapshot.remainingMs)}`, enabled: false }, { type: "separator" }, { label: action, click: () => { void runCommand(snapshot.status === "running" ? "pause" : snapshot.status === "idle" ? "start" : "resume"); } }, { label: "下一轮", click: () => { void runCommand("next"); } }, { label: "显示窗口", click: () => showWindow() }, { type: "separator" }, { label: "退出", click: () => { quitting = true; app.quit(); } }]));
+}
+async function runCommand(command: Parameters<TimerEngine["command"]>[0]): Promise<void> {
+  const before = currentEngine().snapshot; const snapshot = currentEngine().command(command); broadcast({ type: "timer.snapshot", snapshot });
+  if (before.round.kind !== snapshot.round.kind || before.round.cycleNumber !== snapshot.round.cycleNumber || before.round.positionInCycle !== snapshot.round.positionInCycle) notify("轮次完成", `已进入${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"}`);
+}
 function createWindow(): BrowserWindow {
-  const window = new BrowserWindow({
-    width: 360,
-    height: 478,
-    minWidth: 160,
-    minHeight: 180,
-    show: false,
-    titleBarStyle: "hiddenInset",
-    backgroundColor: "#2f384b",
-    webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-    },
+  const window = new BrowserWindow({ width: 360, height: 478, minWidth: 160, minHeight: 180, show: false, titleBarStyle: "hiddenInset", backgroundColor: "#f6f3ee", webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
+  window.setAlwaysOnTop(engine?.settings.alwaysOnTop ?? false);
+  window.once("ready-to-show", () => window.show());
+  window.on("close", (event) => { if (!quitting && process.platform !== "darwin") { event.preventDefault(); window.hide(); } });
+  window.webContents.setWindowOpenHandler(({ url }) => { if (url.startsWith("https:")) void shell.openExternal(url); return { action: "deny" }; });
+  const rendererUrl = process.env["ELECTRON_RENDERER_URL"] ?? pathToFileURL(join(__dirname, "../renderer/index.html")).toString();
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url !== rendererUrl) event.preventDefault();
   });
-
-  window.once("ready-to-show", () => {
-    window.show();
-  });
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("https:")) {
-      void shell.openExternal(url);
-    }
-    return { action: "deny" };
-  });
-  window.webContents.on("will-navigate", (event) => {
-    event.preventDefault();
-  });
-
-  if (process.env["ELECTRON_RENDERER_URL"]) {
-    void window.loadURL(process.env["ELECTRON_RENDERER_URL"]);
-  } else {
-    void window.loadFile(join(__dirname, "../renderer/index.html"));
-  }
+  void window.loadURL(rendererUrl);
   return window;
 }
-
-// 领域：Electron / IPC
-// 顺序：命令和读快照链第 3 站：Preload invoke -> Main IPC -> 调用方验证。
-// 作用：确认一次 IPC 调用来自当前主窗口的 Renderer。
-// 原因：preload 的类型不是安全边界，任意 WebContents 都不应能调用计时命令。
-// 边界：通过验证后仍需对每个载荷做运行时 schema 校验。
-function isMainWindow(event: IpcMainInvokeEvent): boolean {
-  return event.sender.id === mainWindow?.webContents.id;
+function showWindow(): void { if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow(); else { mainWindow.show(); mainWindow.focus(); } }
+function installIpc(): void {
+  ipcMain.handle("pomodoro:get-snapshot", (event) => { assertSender(event); return timerSnapshotSchema.parse(currentEngine().snapshot); });
+  ipcMain.handle("pomodoro:get-settings", (event) => { assertSender(event); return settingsSchema.parse(currentEngine().settings); });
+  ipcMain.handle("pomodoro:get-capabilities", (event) => { assertSender(event); return capabilities; });
+  ipcMain.handle("pomodoro:get-statistics", (event) => { assertSender(event); return statistics(); });
+  ipcMain.handle("pomodoro:command", async (event, raw: unknown) => { assertSender(event); const command = timerCommandSchema.parse(raw); await runCommand(command); return currentEngine().snapshot; });
+  ipcMain.handle("pomodoro:update-settings", (event, raw: unknown) => { assertSender(event); const patch = settingsPatchSchema.parse(raw); const settings = currentEngine().applySettings(patch); mainWindow?.setAlwaysOnTop(settings.alwaysOnTop); publishSnapshot(); return settings; });
 }
-
-function assertMainWindow(event: IpcMainInvokeEvent): void {
-  if (!isMainWindow(event)) {
-    throw new Error("Unsupported IPC sender.");
-  }
-}
-
-// 领域：Electron / IPC
-// 顺序：命令链第 3 站：Preload -> ipcMain handler -> CoreSupervisor -> Go Core。
-// 作用：注册 Renderer 可调用的固定 IPC 白名单，并转发给 Go Core。
-// 原因：显式逐个注册可避免把 ipcRenderer 或任意 channel 暴露给页面代码。
-// 边界：Main 验证调用方和输入；Core 才是计时状态和设置的最终所有者。
-function installIpcHandlers(): void {
-  ipcMain.handle("pomodoro:get-snapshot", async (event) => {
-    assertMainWindow(event);
-    return core.getSnapshot();
-  });
-  ipcMain.handle("pomodoro:get-settings", async (event) => {
-    assertMainWindow(event);
-    return core.getInitializeResult().settings;
-  });
-  ipcMain.handle("pomodoro:get-capabilities", async (event) => {
-    assertMainWindow(event);
-    return capabilitiesSchema.parse(core.getInitializeResult().capabilities);
-  });
-  ipcMain.handle("pomodoro:command", async (event, command: unknown) => {
-    assertMainWindow(event);
-    return core.command(timerCommandSchema.parse(command));
-  });
-  ipcMain.handle("pomodoro:update-settings", async (event, patch: unknown) => {
-    assertMainWindow(event);
-    settingsPatchSchema.parse(patch);
-    throw new Error("Settings updates are introduced with the Phase 1 state machine.");
-  });
-}
-
-// 领域：Electron / 生命周期
-// 顺序：启动链第 1 站：Electron ready -> 注册 IPC -> 启动 Core -> 创建 Renderer 窗口。
-// 作用：Electron 就绪后安装全局安全限制、启动 Core，再创建窗口。
-// 原因：Core 初始化失败时 UI 仍可显示故障状态，而不是让应用在启动阶段直接退出。
-// 边界：此处不缓存或伪造计时快照；Core 不可用时命令会失败。
-app.whenReady().then(async () => {
-  app.on("web-contents-created", (_event, contents) => {
-    contents.on("will-attach-webview", (event) => event.preventDefault());
-    contents.setWindowOpenHandler(() => ({ action: "deny" }));
-  });
-  app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
-      app.quit();
+function startMonitoring(): void {
+  monitorTimer = setInterval(() => {
+    let idle: number | undefined;
+    let available = capabilities.inputMonitoring;
+    if (available) {
+      try {
+        idle = powerMonitor.getSystemIdleTime();
+      } catch {
+        available = false;
+      }
     }
-  });
-  app.on("activate", () => {
-    if (!BrowserWindow.getAllWindows().length) {
-      mainWindow = createWindow();
-    }
-  });
-
-  installIpcHandlers();
+    const snapshot = currentEngine().inputSample(idle, available);
+    broadcast({ type: "timer.snapshot", snapshot });
+  }, 1000);
+  tickTimer = setInterval(() => { const before = lastRoundKey; const snapshot = currentEngine().snapshot; const key = `${snapshot.round.cycleNumber}:${snapshot.round.positionInCycle}`; if (before && before !== key) notify("轮次完成", `已进入${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"}`); lastRoundKey = key; broadcast({ type: "timer.snapshot", snapshot }); }, 500);
+  powerMonitor.on("suspend", () => { const snapshot = currentEngine().systemSuspend(); broadcast({ type: "timer.snapshot", snapshot }); notify("计时已暂停", "系统进入睡眠，恢复后需要继续计时"); });
+  powerMonitor.on("resume", () => { const snapshot = currentEngine().snapshot; broadcast({ type: "timer.snapshot", snapshot }); });
+}
+app.whenReady().then(() => {
   try {
-    await core.start();
+    store = new SqliteStore(app.getPath("userData")); engine = new TimerEngine(store, { now: () => performance.now(), wallDate: () => new Date() }); lastRoundKey = `${engine.snapshot.round.cycleNumber}:${engine.snapshot.round.positionInCycle}`;
+    installIpc();
+    mainWindow = createWindow();
+    const trayIcon = process.platform === "win32" ? "pomodoro-timer.ico" : "pomodoro-timer.png";
+    const trayIconDirectory = app.isPackaged
+      ? join(process.resourcesPath, "icons")
+      : join(__dirname, "../../resources/icons");
+    const trayPath = join(trayIconDirectory, trayIcon);
+    let trayImage = nativeImage.createFromPath(trayPath);
+    // Keep a format fallback for platform-specific nativeImage decoders.
+    if (trayImage.isEmpty() && trayIcon !== "pomodoro-timer.ico") {
+      trayImage = nativeImage.createFromPath(join(trayIconDirectory, "pomodoro-timer.ico"));
+    }
+    if (trayImage.isEmpty()) throw new Error("托盘图标资源不可用");
+    tray = new Tray(trayImage);
+    updateTray();
+    startMonitoring();
+    app.on("activate", () => showWindow()); app.on("window-all-closed", () => { if (process.platform !== "darwin") { /* close-to-tray keeps the process alive */ } });
   } catch (error) {
-    console.error(
-      "Timer core initialization failed:",
-      error instanceof Error ? error.message : "unknown error",
-    );
+    const message = error instanceof Error ? error.message : "无法打开本地数据";
+    dialog.showErrorBox("本地计时器无法启动", `${message}\n\n请备份 pomodoro.sqlite 后重试。`);
+    app.quit();
   }
-  mainWindow = createWindow();
 });
-
-// 领域：Electron / 生命周期
-// 顺序：退出链第 1 站：Electron before-quit -> CoreSupervisor.stop -> Go stdin/stdout 关闭。
-// 作用：应用退出前停止 Go 子进程并拒绝尚未完成的请求。
-// 原因：避免 Core 成为孤儿进程，或让 Renderer 永远等待一个不会返回的请求。
-// 边界：停止只清理本次运行资源，不删除用户目录中的 SQLite 数据。
 app.on("before-quit", () => {
-  core.stop();
+  quitting = true;
+  if (monitorTimer) clearInterval(monitorTimer);
+  if (tickTimer) clearInterval(tickTimer);
+  engine?.systemSuspend();
+  store?.close();
 });
+export { TimerEngine };
