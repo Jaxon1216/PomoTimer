@@ -28,6 +28,11 @@
   --long: #3398a8;
   --accent: #e4584f;
   --shadow: 0 12px 34px #29251d0d;
+  --window-titlebar-leading: 18px;
+}
+
+:root[data-platform="macos"] {
+  --window-titlebar-leading: 86px;
 }
 
 :root.dark {
@@ -96,7 +101,7 @@ select:focus-visible {
   min-height: 48px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px 0 18px;
+  padding: 0 12px 0 var(--window-titlebar-leading);
   -webkit-app-region: drag;
 }
 
@@ -152,12 +157,23 @@ select:focus-visible {
   padding: 0 24px 4px;
 }
 
+.dialSlot {
+  /* 先让元数据和操作占据所需高度，再用剩余空间同时约束圆环与字号。 */
+  display: flex;
+  width: 100%;
+  min-height: 60px;
+  flex: 0 1 220px;
+  justify-content: center;
+  margin-bottom: 10px;
+  container-type: size;
+}
+
 .timerDial {
+  --dial-size: min(100cqw, 100cqh, 220px);
   position: relative;
-  width: 220px;
-  height: 220px;
+  width: var(--dial-size);
+  height: var(--dial-size);
   flex: 0 0 auto;
-  margin: 0 0 10px;
 }
 
 .timerDial svg {
@@ -200,12 +216,15 @@ select:focus-visible {
 }
 
 .dialContent time {
+  display: block;
+  max-width: 100%;
   font-family: MonaMono, "SF Mono", monospace;
-  font-size: 44px;
+  font-size: clamp(12px, calc(var(--dial-size) * 0.2), 44px);
   font-weight: 450;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.08em;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .roundMeta {
@@ -246,6 +265,7 @@ select:focus-visible {
   color: var(--foreground);
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.2;
 }
 
 .stateDot {
@@ -342,7 +362,7 @@ select:focus-visible {
 
 .compact .titlebar {
   min-height: 34px;
-  padding: 0 8px;
+  padding: 0 8px 0 var(--window-titlebar-leading);
 }
 
 .compact .brand {
@@ -350,18 +370,18 @@ select:focus-visible {
 }
 
 .compact .timerStage {
-  justify-content: space-evenly;
+  justify-content: center;
+  gap: 0;
   padding: 0 7px 2px;
 }
 
+.compact .dialSlot {
+  flex-basis: 166px;
+  margin-bottom: 2px;
+}
+
 .compact .timerDial {
-  width: min(70vw, calc(100vh - 126px));
-  height: min(70vw, calc(100vh - 126px));
-  min-width: 54px;
-  min-height: 54px;
-  max-width: 166px;
-  max-height: 166px;
-  margin: 0 auto 2px;
+  --dial-size: min(100cqw, 100cqh, 166px);
 }
 
 .compact .dialProgress {
@@ -369,7 +389,7 @@ select:focus-visible {
 }
 
 .compact .dialContent time {
-  font-size: clamp(18px, 14vw, 34px);
+  font-size: clamp(12px, calc(var(--dial-size) * 0.2), 34px);
 }
 
 .compact .roundMeta {
@@ -388,8 +408,13 @@ select:focus-visible {
 }
 
 .compact .statePill {
+  max-width: 100%;
+  min-height: 14px;
+  overflow: hidden;
   margin-top: 2px;
   font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .compact .timerControls {
@@ -413,8 +438,9 @@ select:focus-visible {
   min-height: 48px;
   align-items: center;
   justify-content: center;
-  padding: 0 14px;
+  padding: 0 14px 0 var(--window-titlebar-leading);
   border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
 }
 
 .pageHeader h1 {
@@ -425,7 +451,7 @@ select:focus-visible {
 
 .backButton {
   position: absolute;
-  left: 12px;
+  left: var(--window-titlebar-leading);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -436,6 +462,7 @@ select:focus-visible {
   border-radius: 5px;
   cursor: pointer;
   font-size: 11px;
+  -webkit-app-region: no-drag;
 }
 
 .backButton:hover {
@@ -596,6 +623,7 @@ select:focus-visible {
   cursor: pointer;
   font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .saveButton:hover {
@@ -867,5 +895,62 @@ select:focus-visible {
 @media (max-width: 300px), (max-height: 390px) {
   .titlebar {
     min-height: 34px;
+  }
+
+  :root[data-platform="macos"] .titlebar .brand {
+    display: none;
+  }
+
+  :root[data-platform="macos"] .pageHeader {
+    justify-content: flex-start;
+  }
+
+  .pageHeader .backButton {
+    right: 6px;
+    left: auto;
+    width: 30px;
+    padding: 5px;
+    gap: 0;
+  }
+
+  .pageHeader .backLabel {
+    display: none;
+  }
+}
+
+@media (max-width: 300px) {
+  .settingsScroll {
+    padding: 14px 12px 10px;
+  }
+
+  .settingGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wideSetting {
+    width: 100%;
+  }
+
+  .segmented,
+  .themeChoices {
+    flex-wrap: wrap;
+  }
+
+  .segmented span {
+    flex-basis: 100%;
+  }
+
+  .settingsFooter {
+    gap: 6px;
+    padding: 8px 12px 10px;
+  }
+
+  .saveHint {
+    min-width: 0;
+  }
+
+  .saveButton {
+    flex-shrink: 0;
+    padding: 8px 10px;
   }
 }

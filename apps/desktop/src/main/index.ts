@@ -1,18 +1,51 @@
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, Menu, Notification, nativeImage, powerMonitor, Tray, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, Menu, Notification, nativeImage, powerMonitor, Tray, ipcMain, shell, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { capabilitiesSchema, coreEventSchema, settingsPatchSchema, settingsSchema, statisticsSnapshotSchema, timerCommandSchema, timerSnapshotSchema, type CoreEvent } from "../shared/contracts.js";
 import { SqliteStore } from "./store.js";
 import { TimerEngine } from "./timer.js";
 
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
+let trayIconImage: NativeImage | undefined;
 let store: SqliteStore | undefined;
 let engine: TimerEngine | undefined;
 let monitorTimer: NodeJS.Timeout | undefined;
 let tickTimer: NodeJS.Timeout | undefined;
 let quitting = false;
 let lastRoundKey = "";
+const trayToolTip = "Pomodoro Timer";
+
+// 领域：Electron / 主进程诊断
+// 顺序：验证脚本 -> Node inspector -> 当前 Main 持有的窗口与 Tray。
+// 作用：按实际 PID、数据目录和原生边界确认测试实例的归属。
+// 原因：系统可能同时运行多个实例，不能仅凭截图猜测图标或窗口来源。
+// 边界：仅显式诊断环境启用，不增加 preload、IPC 或 Renderer 能力。
+export function inspectDesktopRuntime() {
+  return {
+    pid: process.pid,
+    userData: app.getPath("userData"),
+    packaged: app.isPackaged,
+    devServerUrl: process.env["ELECTRON_RENDERER_URL"] ?? null,
+    window: mainWindow && !mainWindow.isDestroyed() ? {
+      bounds: mainWindow.getBounds(),
+      contentBounds: mainWindow.getContentBounds(),
+      webContentsId: mainWindow.webContents.id,
+    } : null,
+    tray: tray && !tray.isDestroyed() && trayIconImage ? {
+      bounds: tray.getBounds(),
+      tooltip: trayToolTip,
+      template: trayIconImage.isTemplateImage(),
+      size: trayIconImage.getSize(),
+      scales: trayIconImage.getScaleFactors(),
+    } : null,
+  };
+}
+
+if (process.env["POMODORO_DIAGNOSTICS"] === "1") {
+  Object.defineProperty(globalThis, Symbol.for("pomodoro.desktop.inspect"), { value: inspectDesktopRuntime });
+}
 
 const capabilities = capabilitiesSchema.parse({ inputMonitoring: process.platform === "darwin" || process.platform === "win32", cameraPresence: false, standingFocus: false });
 
@@ -41,7 +74,23 @@ async function runCommand(command: Parameters<TimerEngine["command"]>[0]): Promi
   if (before.round.kind !== snapshot.round.kind || before.round.cycleNumber !== snapshot.round.cycleNumber || before.round.positionInCycle !== snapshot.round.positionInCycle) notify("轮次完成", `已进入${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"}`);
 }
 function createWindow(): BrowserWindow {
-  const window = new BrowserWindow({ width: 360, height: 478, useContentSize: true, autoHideMenuBar: true, show: false, titleBarStyle: "hiddenInset", backgroundColor: "#f6f3ee", webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
+  // 领域：Electron / 主进程
+  // 顺序：应用启动链第 3 站，Main -> BrowserWindow -> Renderer 标题栏布局。
+  // 作用：只在 macOS 启用 hiddenInset 和原生 traffic-light 位置。
+  // 原因：macOS 原生按钮属于窗口外观；Windows 必须保留默认标题栏和内容尺寸换算。
+  // 边界：不向 Renderer 暴露 Node、路径或通用 IPC，只由浏览器平台标记控制受控 CSS。
+  const macOS = process.platform === "darwin";
+  const window = new BrowserWindow({
+    width: 360,
+    height: 478,
+    useContentSize: true,
+    autoHideMenuBar: true,
+    show: false,
+    titleBarStyle: macOS ? "hiddenInset" : "default",
+    ...(macOS ? { trafficLightPosition: { x: 14, y: 14 } } : {}),
+    backgroundColor: "#f6f3ee",
+    webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
+  });
   // 领域：Electron / 窗口布局
   // 顺序：createWindow -> 读取原生边框尺寸 -> 设置最小窗口 -> Renderer 布局。
   // 作用：将 160x180 的最小内容区域换算为当前平台的最小外框尺寸。
@@ -89,22 +138,48 @@ function startMonitoring(): void {
   powerMonitor.on("resume", () => { const snapshot = currentEngine().snapshot; broadcast({ type: "timer.snapshot", snapshot }); });
 }
 app.whenReady().then(() => {
+  // 领域：Electron / 验收隔离
+  // 顺序：测试启动参数 -> Main 就绪 -> 隔离校验 -> SqliteStore。
+  // 作用：拒绝参数未透传或数据目录不匹配的诊断启动。
+  // 原因：开发工具可能吞掉 CLI 参数，必须在打开数据库之前失败。
+  // 边界：只约束显式诊断实例，正常用户启动不受影响。
+  if (process.env["POMODORO_DIAGNOSTICS"] === "1") {
+    try {
+      const requestedDirectory = app.commandLine.getSwitchValue("user-data-dir");
+      if (!isAbsolute(requestedDirectory) || realpathSync(requestedDirectory) !== realpathSync(app.getPath("userData"))) {
+        throw new Error("诊断启动必须传入独立、有效的 --user-data-dir 绝对路径");
+      }
+      const expectedDirectory = process.env["POMODORO_EXPECTED_USER_DATA"];
+      if (expectedDirectory && realpathSync(expectedDirectory) !== realpathSync(requestedDirectory)) {
+        throw new Error("诊断启动的数据目录与预期目录不匹配");
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : "诊断数据隔离校验失败");
+      app.exit(1);
+      return;
+    }
+  }
   try {
     store = new SqliteStore(app.getPath("userData")); engine = new TimerEngine(store, { now: () => performance.now(), wallDate: () => new Date() }); lastRoundKey = `${engine.snapshot.round.cycleNumber}:${engine.snapshot.round.positionInCycle}`;
     installIpc();
     mainWindow = createWindow();
-    const trayIcon = process.platform === "win32" ? "pomodoro-timer.ico" : "pomodoro-timer.png";
+    const trayIcon = process.platform === "win32" ? "pomodoro-timer.ico" : process.platform === "darwin" ? "trayTemplate.png" : "pomodoro-timer.png";
     const trayIconDirectory = app.isPackaged
       ? join(process.resourcesPath, "icons")
       : join(__dirname, "../../resources/icons");
     const trayPath = join(trayIconDirectory, trayIcon);
-    let trayImage = nativeImage.createFromPath(trayPath);
-    // Keep a format fallback for platform-specific nativeImage decoders.
-    if (trayImage.isEmpty() && trayIcon !== "pomodoro-timer.ico") {
-      trayImage = nativeImage.createFromPath(join(trayIconDirectory, "pomodoro-timer.ico"));
+    let trayImage: NativeImage = nativeImage.createFromPath(trayPath);
+    if (process.platform === "darwin" && !trayImage.isEmpty()) {
+      const retinaImage = nativeImage.createFromPath(join(trayIconDirectory, "trayTemplate@2x.png"));
+      if (!retinaImage.isEmpty()) trayImage.addRepresentation({ scaleFactor: 2, buffer: retinaImage.toPNG() });
+      trayImage.setTemplateImage(true);
     }
+    // Keep a format fallback for platform-specific nativeImage decoders.
+    if (trayImage.isEmpty() && process.platform !== "darwin" && trayIcon !== "pomodoro-timer.ico") trayImage = nativeImage.createFromPath(join(trayIconDirectory, "pomodoro-timer.ico"));
     if (trayImage.isEmpty()) throw new Error("托盘图标资源不可用");
+    trayIconImage = trayImage;
     tray = new Tray(trayImage);
+    tray.setToolTip(trayToolTip);
     updateTray();
     startMonitoring();
     app.on("activate", () => showWindow()); app.on("window-all-closed", () => { if (process.platform !== "darwin") { /* close-to-tray keeps the process alive */ } });

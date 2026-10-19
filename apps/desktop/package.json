@@ -61,7 +61,9 @@
         "filter": [
           "pomodoro-timer.icns",
           "pomodoro-timer.ico",
-          "pomodoro-timer.png"
+          "pomodoro-timer.png",
+          "trayTemplate.png",
+          "trayTemplate@2x.png"
         ]
       }
     ],

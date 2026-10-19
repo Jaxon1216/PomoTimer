@@ -20,6 +20,7 @@ import type {
   TimerCommand,
   TimerSnapshot,
 } from "../shared/contracts";
+import { formatDuration } from "./time";
 
 type View = "timer" | "settings" | "stats";
 
@@ -29,17 +30,21 @@ const labels = {
   "long-break": "长休",
 } as const;
 
-function formatDuration(milliseconds: number): string {
-  const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
-  return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60)
-    .toString()
-    .padStart(2, "0")}`;
-}
-
-function statusText(snapshot: TimerSnapshot): string {
+function statusText(snapshot: TimerSnapshot, compact = false): string {
   if (snapshot.status === "idle") return "准备开始";
   if (snapshot.status === "running") return snapshot.round.kind === "focus" ? "专注中" : "休息中";
   if (snapshot.status === "manual-paused") return "手动暂停";
+
+  if (compact) {
+    switch (snapshot.automation.pauseReason) {
+      case "input-away": return "离席 · 自动暂停";
+      case "break-condition": return snapshot.status === "auto-paused" ? "等待离席" : "回到工位 · 休息暂停";
+      case "source-unavailable": return "检测不可用 · 手动控制";
+      case "system-suspend": return "系统暂停";
+      case "core-recovery": return "恢复后暂停";
+      default: return "自动暂停";
+    }
+  }
 
   switch (snapshot.automation.pauseReason) {
     case "input-away":
@@ -113,7 +118,7 @@ function TimerView({
 }): ReactElement {
   const action = primaryCommand(snapshot);
   const progress = 1 - snapshot.remainingMs / snapshot.round.totalDurationMs;
-  const circumference = 2 * Math.PI * 110;
+  const circumference = 2 * Math.PI * 108;
   const monitorStatus = snapshot.automation.inputMonitoringAvailable
     ? `系统输入检测 · ${settings.inputIdleThresholdSeconds} 秒阈值`
     : "输入检测不可用 · 手动控制模式";
@@ -135,25 +140,27 @@ function TimerView({
       </header>
 
       <section className="timerStage" aria-labelledby="round-title">
-        <div
-          className="timerDial"
-          aria-label={`${labels[snapshot.round.kind]}，剩余 ${formatDuration(snapshot.remainingMs)}，${statusText(snapshot)}`}
-        >
-          <svg viewBox="0 0 230 230" aria-hidden="true">
-            <circle className="dialTrack" cx="115" cy="115" r="110" />
-            <circle
-              className="dialProgress"
-              cx="115"
-              cy="115"
-              r="110"
-              style={{
-                strokeDasharray: circumference,
-                strokeDashoffset: circumference * (1 - Math.max(0, Math.min(1, progress))),
-              }}
-            />
-          </svg>
-          <div className="dialContent">
-            <time>{formatDuration(snapshot.remainingMs)}</time>
+        <div className="dialSlot">
+          <div
+            className="timerDial"
+            aria-label={`${labels[snapshot.round.kind]}，剩余 ${formatDuration(snapshot.remainingMs)}，${statusText(snapshot)}`}
+          >
+            <svg viewBox="0 0 230 230" aria-hidden="true">
+              <circle className="dialTrack" cx="115" cy="115" r="108" />
+              <circle
+                className="dialProgress"
+                cx="115"
+                cy="115"
+                r="108"
+                style={{
+                  strokeDasharray: circumference,
+                  strokeDashoffset: circumference * (1 - Math.max(0, Math.min(1, progress))),
+                }}
+              />
+            </svg>
+            <div className="dialContent">
+              <time>{formatDuration(snapshot.remainingMs)}</time>
+            </div>
           </div>
         </div>
 
@@ -167,9 +174,9 @@ function TimerView({
           )}
         </div>
 
-        <div className={`statePill state-${snapshot.status}`}>
+        <div className={`statePill state-${snapshot.status}`} title={statusText(snapshot)}>
           <span className="stateDot" />
-          {statusText(snapshot)}
+          {statusText(snapshot, compact)}
         </div>
         <p className="monitorStatus">{monitorStatus}</p>
 
@@ -236,9 +243,9 @@ function SettingsView({
   return (
     <main className="pageSurface">
       <header className="pageHeader">
-        <button className="backButton" type="button" onClick={onBack}>
+        <button className="backButton" type="button" aria-label="返回计时器" onClick={onBack}>
           <ChevronLeft size={17} />
-          计时器
+          <span className="backLabel">计时器</span>
         </button>
         <h1>设置</h1>
         <span className="headerSpacer" />
@@ -390,8 +397,8 @@ function StatsView({
     return (
       <main className="pageSurface">
         <header className="pageHeader">
-          <button className="backButton" type="button" onClick={onBack}>
-            <ChevronLeft size={17} />计时器
+          <button className="backButton" type="button" aria-label="返回计时器" onClick={onBack}>
+            <ChevronLeft size={17} /><span className="backLabel">计时器</span>
           </button>
           <h1>统计</h1>
           <span className="headerSpacer" />
@@ -421,8 +428,8 @@ function StatsView({
   return (
     <main className="pageSurface">
       <header className="pageHeader">
-        <button className="backButton" type="button" onClick={onBack}>
-          <ChevronLeft size={17} />计时器
+        <button className="backButton" type="button" aria-label="返回计时器" onClick={onBack}>
+          <ChevronLeft size={17} /><span className="backLabel">计时器</span>
         </button>
         <h1>统计</h1>
         <span className="headerSpacer" />

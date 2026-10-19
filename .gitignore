@@ -4,6 +4,7 @@ out/
 release/
 playwright-report/
 test-results/
+diagnostics/
 *.db
 *.db-shm
 *.db-wal

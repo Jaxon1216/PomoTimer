@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { formatDuration } from "./time";
 import type {
   Capabilities,
   Settings,
@@ -81,9 +82,24 @@ const shortBreakSnapshot: TimerSnapshot = {
 };
 
 describe("App", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    [1_800_000, "30:00"],
+    [1_771_000, "29:31"],
+    [599_000, "09:59"],
+    [0, "00:00"],
+    [7_200_000, "120:00"],
+  ])("formats %s milliseconds as %s without assuming two minute digits", (milliseconds, expected) => {
+    expect(formatDuration(milliseconds)).toBe(expected);
+  });
 
   beforeEach(() => {
+    vi.stubGlobal("innerWidth", 1024);
+    vi.stubGlobal("innerHeight", 768);
     window.pomodoro = {
       getSnapshot: vi.fn().mockResolvedValue(snapshot),
       getSettings: vi.fn().mockResolvedValue(settings),
@@ -140,6 +156,54 @@ describe("App", () => {
     expect(
       await screen.findByRole("button", { name: "暂停计时" }),
     ).toBeEnabled();
+  });
+
+  it("resizes presentation without changing a manually paused Core snapshot", async () => {
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({
+      ...snapshot,
+      status: "manual-paused",
+      remainingMs: 7_200_000,
+      round: { ...snapshot.round, totalDurationMs: 7_200_000 },
+      automation: { ...snapshot.automation, manualPauseLocked: true },
+    } satisfies TimerSnapshot);
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+
+    vi.stubGlobal("innerWidth", 160);
+    vi.stubGlobal("innerHeight", 180);
+    fireEvent.resize(window);
+    expect(screen.getByRole("main")).toHaveClass("compact");
+    expect(screen.getByText("120:00")).toBeInTheDocument();
+    expect(screen.getByText("手动暂停")).toBeInTheDocument();
+
+    vi.stubGlobal("innerWidth", 301);
+    vi.stubGlobal("innerHeight", 391);
+    fireEvent.resize(window);
+    expect(screen.getByRole("main")).not.toHaveClass("compact");
+    expect(screen.getByText("120:00")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续计时" })).toBeEnabled();
+    expect(window.pomodoro.command).not.toHaveBeenCalled();
+    expect(window.pomodoro.getSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the full pause reason when compact status text is shortened", async () => {
+    vi.stubGlobal("innerWidth", 160);
+    vi.stubGlobal("innerHeight", 180);
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({
+      ...snapshot,
+      status: "auto-paused",
+      automation: {
+        ...snapshot.automation,
+        inputMonitoringAvailable: false,
+        pauseReason: "source-unavailable",
+      },
+    } satisfies TimerSnapshot);
+    render(<App />);
+
+    expect(await screen.findByText("检测不可用 · 手动控制"))
+      .toHaveAttribute("title", "输入检测不可用，需手动控制");
+    expect(screen.getByLabelText("专注，剩余 30:00，输入检测不可用，需手动控制"))
+      .toBeInTheDocument();
   });
 
   it("surfaces an unavailable Core without substituting local state", async () => {
