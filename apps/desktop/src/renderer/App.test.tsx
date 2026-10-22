@@ -13,6 +13,7 @@ import type {
   Capabilities,
   CoreEvent,
   Settings,
+  StatisticsSnapshot,
   TimerSnapshot,
   WindowMode,
 } from "../shared/contracts";
@@ -93,6 +94,28 @@ const waitingBreakSnapshot: TimerSnapshot = {
     pauseReason: "break-condition",
   },
 };
+
+const statistics: StatisticsSnapshot = {
+  generatedAt: "2026-11-06T09:00:00.000Z",
+  today: { localDate: "2026-11-06", completedFocusMinutes: 30, completedFocusRounds: 1 },
+  week: [],
+  heatmap: [
+    { localDate: "2026-10-31", completedFocusMinutes: 0, completedFocusRounds: 0 },
+    { localDate: "2026-11-01", completedFocusMinutes: 30, completedFocusRounds: 1 },
+    { localDate: "2026-11-02", completedFocusMinutes: 60, completedFocusRounds: 2 },
+    { localDate: "2026-11-03", completedFocusMinutes: 0, completedFocusRounds: 0 },
+    { localDate: "2026-11-04", completedFocusMinutes: 0, completedFocusRounds: 0 },
+    { localDate: "2026-11-05", completedFocusMinutes: 0, completedFocusRounds: 0 },
+    { localDate: "2026-11-06", completedFocusMinutes: 30, completedFocusRounds: 1 },
+  ],
+};
+
+async function openSettings(): Promise<void> {
+  await screen.findByRole("heading", { name: "专注" });
+  fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "打开设置" }));
+  await screen.findByRole("heading", { name: "设置" });
+}
 
 describe("App", () => {
   let eventListener: ((event: CoreEvent) => void) | undefined;
@@ -380,6 +403,167 @@ describe("App", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "计时核心不可用" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "开始计时" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["专注时长", "", "请输入 5–120 之间的整数"],
+    ["专注时长", "4", "请输入 5–120 之间的整数"],
+    ["短休时长", "1.5", "请输入 1–60 之间的整数"],
+    ["长休时长", "91", "请输入 1–90 之间的整数"],
+    ["输入闲置阈值", "601", "请输入 10–600 之间的整数"],
+  ])("validates %s locally for %s and keeps editable drafts", async (label, value, message) => {
+    render(<App />);
+    await openSettings();
+    const input = screen.getByRole("spinbutton", { name: label });
+    fireEvent.change(input, { target: { value } });
+    expect(input).toHaveValue(value === "" ? null : Number(value));
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    expect(screen.getByText(message)).toBeVisible();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(window.pomodoro.updateSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "设置" })).toBeVisible();
+  });
+
+  it("keeps failed settings saves local and allows retry without losing the draft", async () => {
+    const update = vi.fn().mockRejectedValueOnce(new Error("写入失败"))
+      .mockResolvedValue({ ...settings, focusDurationSeconds: 1_500 });
+    window.pomodoro.updateSettings = update;
+    render(<App />);
+    await openSettings();
+    fireEvent.change(screen.getByRole("spinbutton", { name: "专注时长" }), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("写入失败");
+    expect(screen.getByRole("spinbutton", { name: "专注时长" })).toHaveValue(25);
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    expect(await screen.findByText("已保存")).toBeVisible();
+    expect(update).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables duplicate saves while a settings write is pending", async () => {
+    let finish: ((value: Settings) => void) | undefined;
+    window.pomodoro.updateSettings = vi.fn(() => new Promise<Settings>((resolve) => { finish = resolve; }));
+    render(<App />);
+    await openSettings();
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    expect(screen.getByRole("button", { name: "保存中…" })).toBeDisabled();
+    await act(async () => finish?.(settings));
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled();
+  });
+
+  it.each(["command", "window mode"])("keeps the timer usable after a failed %s operation", async (operation) => {
+    if (operation === "command") window.pomodoro.command = vi.fn().mockRejectedValue(new Error("操作失败"));
+    else window.pomodoro.setWindowMode = vi.fn().mockRejectedValue(new Error("操作失败"));
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    fireEvent.click(screen.getByRole("button", { name: operation === "command" ? "开始计时" : "切换迷你模式" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("操作失败");
+    expect(screen.getByRole("heading", { name: "专注" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "开始计时" })).toBeEnabled();
+  });
+
+  it("surfaces a persistent storage failure instead of leaving active timer controls", async () => {
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue(runningSnapshot);
+    render(<App />);
+    await screen.findByRole("button", { name: "暂停计时" });
+    act(() => eventListener?.({ type: "core.error", code: "STORAGE_UNAVAILABLE", message: "本地数据写入失败", recoverable: false }));
+    expect(screen.getByRole("alert")).toHaveTextContent("本地数据写入失败");
+    expect(screen.getByRole("heading", { name: "本地存储不可用" })).toBeVisible();
+    expect(screen.getByText("计时已安全暂停，请重新打开应用后重试。")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "暂停计时" })).not.toBeInTheDocument();
+  });
+
+  it("shows recoverable Core errors without removing timer controls", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    act(() => eventListener?.({ type: "core.error", code: "TEMPORARY", message: "请重试", recoverable: true }));
+    expect(screen.getByRole("alert")).toHaveTextContent("请重试");
+    expect(screen.getByRole("button", { name: "开始计时" })).toBeEnabled();
+  });
+
+  it("retries statistics loading failures and refreshes on focus and reentry", async () => {
+    const getStatistics = vi.fn().mockRejectedValueOnce(new Error("统计读取失败")).mockResolvedValue(statistics);
+    window.pomodoro.getStatistics = getStatistics;
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "打开统计" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("统计读取失败");
+    fireEvent.click(screen.getByRole("button", { name: "重试加载统计" }));
+    await screen.findByText("今日专注");
+    expect(getStatistics).toHaveBeenCalledTimes(2);
+    fireEvent.focus(window);
+    await waitFor(() => expect(getStatistics).toHaveBeenCalledTimes(3));
+    fireEvent.click(screen.getByRole("button", { name: "返回计时器" }));
+    expect(screen.getByRole("button", { name: "开始计时" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "打开统计" }));
+    await waitFor(() => expect(getStatistics).toHaveBeenCalledTimes(4));
+  });
+
+  it("opens the heatmap at its latest week and exposes daily values through keyboard navigation", async () => {
+    window.pomodoro.getStatistics = vi.fn().mockResolvedValue(statistics);
+    const scrollWidth = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(900);
+    const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+    try {
+      render(<App />);
+      fireEvent.click(await screen.findByRole("button", { name: "打开统计" }));
+      const latest = await screen.findByRole("button", { name: "2026-11-06，专注 30 分钟" });
+      const frame = screen.getByRole("region", { name: "最近 52 周专注热力图" });
+      await waitFor(() => expect(frame.scrollLeft).toBe(600));
+      expect(latest).toHaveAttribute("tabindex", "0");
+      fireEvent.focus(latest);
+      fireEvent.keyDown(latest, { key: "ArrowUp" });
+      expect(screen.getByRole("button", { name: "2026-11-05，专注 0 分钟" })).toHaveFocus();
+      expect(screen.getByText("2026-11-05 · 0 分钟")).toBeVisible();
+      expect(screen.getByText("10月")).toBeVisible();
+      expect(screen.getByText("11月")).toBeVisible();
+      expect(screen.getByText(/颜色越深，完成专注分钟越多/)).toBeVisible();
+    } finally {
+      scrollWidth.mockRestore();
+      clientWidth.mockRestore();
+    }
+  });
+
+  it("announces selected appearance and break mode choices", async () => {
+    render(<App />);
+    await openSettings();
+    expect(screen.getByRole("button", { name: "跟随系统" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "深色" }));
+    expect(screen.getByRole("button", { name: "深色" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "跟随系统" })).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(screen.getByRole("button", { name: "桌前休息" }));
+    expect(screen.getByRole("button", { name: "桌前休息" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("positions the first heatmap record at the latest week when statistics arrive live", async () => {
+    window.pomodoro.getStatistics = vi.fn().mockResolvedValue({
+      ...statistics,
+      heatmap: statistics.heatmap.map((day) => ({ ...day, completedFocusMinutes: 0, completedFocusRounds: 0 })),
+    });
+    const scrollWidth = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(900);
+    const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+    try {
+      render(<App />);
+      fireEvent.click(await screen.findByRole("button", { name: "打开统计" }));
+      await screen.findByText("还没有完成记录");
+      act(() => eventListener?.({ type: "stats.changed", statistics }));
+      expect(screen.getByRole("region", { name: "最近 52 周专注热力图" }).scrollLeft).toBe(600);
+    } finally {
+      scrollWidth.mockRestore();
+      clientWidth.mockRestore();
+    }
+  });
+
+  it("keeps the latest day keyboard reachable after the selected date leaves the rolling heatmap", async () => {
+    window.pomodoro.getStatistics = vi.fn().mockResolvedValue(statistics);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "打开统计" }));
+    const oldest = await screen.findByRole("button", { name: "2026-10-31，专注 0 分钟" });
+    act(() => oldest.focus());
+    expect(oldest).toHaveAttribute("tabindex", "0");
+    const newDay = { localDate: "2026-11-07", completedFocusMinutes: 0, completedFocusRounds: 0 };
+    act(() => eventListener?.({ type: "stats.changed", statistics: {
+      ...statistics, today: newDay, heatmap: [...statistics.heatmap.slice(1), newDay],
+    } }));
+    expect(screen.queryByRole("button", { name: "2026-10-31，专注 0 分钟" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "2026-11-07，专注 0 分钟" })).toHaveAttribute("tabindex", "0");
   });
 
   it("updates a system theme when the operating system theme changes", async () => {

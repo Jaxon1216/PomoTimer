@@ -30,6 +30,8 @@ class FakeStore implements TimerStore {
   settings = defaultSettings;
   sessions: CompletedSession[] = [];
   failCommit = false;
+  failSnapshot = false;
+  snapshotWrites = 0;
 
   loadSnapshot(): TimerSnapshot | undefined {
     return this.snapshot;
@@ -40,6 +42,8 @@ class FakeStore implements TimerStore {
   }
 
   saveSnapshot(snapshot: TimerSnapshot): void {
+    this.snapshotWrites += 1;
+    if (this.failSnapshot) throw new Error("snapshot failed");
     this.snapshot = structuredClone(snapshot);
   }
 
@@ -112,6 +116,251 @@ describe("TimerEngine", () => {
     expect(engine.snapshot.remainingMs).toBe(remaining);
   });
 
+  describe("manual timing while input is unavailable", () => {
+    it.each(["start", "resume"] as const)("keeps an explicit %s running through repeated failed samples", (command) => {
+      const { engine, clock } = create();
+      if (command === "resume") engine.command("start");
+      const unavailable = engine.inputSample(undefined, false);
+      engine.command(command);
+
+      for (let sample = 0; sample < 3; sample += 1) {
+        clock.advance(1_000);
+        const snapshot = engine.inputSample(undefined, false);
+        expect(snapshot.status).toBe("running");
+        expect(snapshot.automation.inputMonitoringAvailable).toBe(false);
+        expect(snapshot.automation.inputPresence).toBe("unknown");
+        expect(snapshot.remainingMs).toBe(unavailable.remainingMs - (sample + 1) * 1_000);
+      }
+    });
+
+    it("restores normal automation on the first valid sample and the next failure pauses again", () => {
+      const { engine } = create();
+      engine.inputSample(undefined, false);
+      engine.command("start");
+      expect(engine.inputSample(40, true).status).toBe("auto-paused");
+      expect(engine.inputSample(0, true).status).toBe("running");
+      expect(engine.inputSample(undefined, false).status).toBe("auto-paused");
+    });
+
+    it.each(["suspend", "restart", "lock"] as const)("discards the manual fallback after %s", (interruption) => {
+      const { engine: original, clock, store } = create();
+      let engine = original;
+      engine.inputSample(undefined, false);
+      engine.command("start");
+      if (interruption === "suspend") engine.systemSuspend();
+      else if (interruption === "lock") {
+        engine.systemLock();
+        engine.systemUnlock();
+      } else engine = new TimerEngine(store, clock);
+
+      const remaining = engine.snapshot.remainingMs;
+      clock.advance(5_000);
+      expect(engine.inputSample(undefined, false).status).toBe("auto-paused");
+      expect(engine.snapshot.remainingMs).toBe(remaining);
+      engine.command("resume");
+      expect(engine.inputSample(undefined, false).status).toBe("running");
+    });
+
+    it("preserves a manual pause even after the fallback was explicitly enabled", () => {
+      const { engine, clock } = create();
+      engine.inputSample(undefined, false);
+      engine.command("start");
+      const paused = engine.command("pause");
+      clock.advance(1_000);
+      const failed = engine.inputSample(undefined, false);
+      expect(failed.status).toBe("manual-paused");
+      expect(failed.automation.manualPauseLocked).toBe(true);
+      expect(failed.remainingMs).toBe(paused.remainingMs);
+    });
+
+    it("does not carry a manual fallback into the next break", () => {
+      const { engine } = create();
+      engine.inputSample(undefined, false);
+      engine.command("start");
+      expect(engine.command("next").status).toBe("auto-paused");
+      expect(engine.inputSample(undefined, false).status).toBe("auto-paused");
+    });
+  });
+
+  describe("screen locking", () => {
+    it("freezes focus until unlock and a subsequent valid sample", () => {
+      const { engine, clock } = create();
+      engine.command("start");
+      clock.advance(1_000);
+      const locked = engine.systemLock();
+      expect(locked.status).toBe("auto-paused");
+      expect(locked.automation.pauseReason).toBe("system-lock");
+
+      clock.advance(5_000);
+      expect(engine.inputSample(0, true).status).toBe("auto-paused");
+      expect(engine.inputSample(undefined, false).automation.pauseReason).toBe("system-lock");
+      expect(engine.snapshot.remainingMs).toBe(locked.remainingMs);
+      expect(() => engine.command("resume")).toThrow("锁屏");
+      expect(engine.systemUnlock().status).toBe("auto-paused");
+      expect(engine.inputSample(undefined, false).status).toBe("auto-paused");
+      expect(engine.inputSample(0, true).status).toBe("running");
+    });
+
+    it.each(["focus", "break"] as const)("clears the locked indicator for a %s round even when its run condition remains unmet", (kind) => {
+      const { engine } = create();
+      if (kind === "break") engine.command("next");
+      else engine.command("start");
+      engine.systemLock();
+      const idleSeconds = kind === "focus" ? 40 : 0;
+      engine.inputSample(idleSeconds, true);
+
+      const unlocked = engine.systemUnlock();
+      expect(unlocked.status).toBe("auto-paused");
+      expect(unlocked.automation.pauseReason).toBe(kind === "focus" ? "input-away" : "break-condition");
+      const waiting = engine.inputSample(idleSeconds, true);
+      expect(waiting.status).toBe("auto-paused");
+      expect(waiting.automation.pauseReason).not.toBe("system-lock");
+      expect(engine.command("resume").status).toBe("running");
+    });
+
+    it("shows an unavailable source after unlock and permits an explicit manual fallback", () => {
+      const { engine } = create();
+      engine.command("start");
+      engine.systemLock();
+      engine.inputSample(undefined, false);
+      expect(engine.systemUnlock().automation.pauseReason).toBe("source-unavailable");
+      engine.command("resume");
+      expect(engine.inputSample(undefined, false).status).toBe("running");
+    });
+
+    it("does not restore a stale screen-lock indicator after a process restart", () => {
+      const { engine, clock, store } = create();
+      engine.command("start");
+      engine.systemLock();
+      engine.inputSample(40, true);
+
+      const restored = new TimerEngine(store, clock);
+      expect(restored.snapshot.status).toBe("auto-paused");
+      expect(restored.snapshot.automation.pauseReason).toBe("core-recovery");
+      expect(restored.inputSample(40, true).automation.pauseReason).not.toBe("system-lock");
+      expect(restored.command("resume").status).toBe("running");
+    });
+
+    it("preserves idle and manual pause locks across screen locking", () => {
+      const idle = create();
+      expect(idle.engine.systemLock().status).toBe("idle");
+      expect(() => idle.engine.command("start")).toThrow("锁屏");
+      idle.engine.inputSample(0, true);
+      idle.engine.systemUnlock();
+      expect(idle.engine.inputSample(0, true).status).toBe("idle");
+
+      const manual = create();
+      manual.engine.command("start");
+      manual.engine.command("pause");
+      expect(manual.engine.systemLock().status).toBe("manual-paused");
+      manual.engine.inputSample(0, true);
+      manual.engine.systemUnlock();
+      const stillPaused = manual.engine.inputSample(0, true);
+      expect(stillPaused.status).toBe("manual-paused");
+      expect(stillPaused.automation.manualPauseLocked).toBe(true);
+    });
+
+    it("discards break pre-counting and cannot start a waiting break while locked", () => {
+      const { engine, clock } = create();
+      const waiting = engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+      engine.systemLock();
+      clock.advance(20_000);
+      expect(engine.inputSample(55, true).status).toBe("auto-paused");
+      engine.systemUnlock();
+      const started = engine.inputSample(55, true);
+      expect(started.status).toBe("running");
+      expect(started.remainingMs).toBe(waiting.remainingMs);
+    });
+  });
+
+  describe("storage failure", () => {
+    it("freezes safely without another storage access and blocks further mutations", () => {
+      const { engine, clock, store } = create();
+      engine.command("start");
+      clock.advance(1_000);
+      store.failSnapshot = true;
+      expect(() => engine.inputSample(0, true)).toThrow("snapshot failed");
+      const writes = store.snapshotWrites;
+      const failed = engine.storageFailure();
+      expect(failed.status).toBe("auto-paused");
+      expect(failed.automation.pauseReason).toBe("storage-unavailable");
+      expect(store.snapshotWrites).toBe(writes);
+
+      clock.advance(20_000);
+      expect(engine.snapshot.remainingMs).toBe(failed.remainingMs);
+      expect(engine.inputSample(0, true).status).toBe("auto-paused");
+      for (const command of ["start", "pause", "resume", "next", "reset"] as const) {
+        expect(() => engine.command(command)).toThrow("存储");
+      }
+      expect(() => engine.applySettings({ theme: "dark" })).toThrow("存储");
+      engine.systemSuspend();
+      engine.systemLock();
+      engine.systemUnlock();
+      expect(store.snapshotWrites).toBe(writes);
+    });
+
+    it.each(["idle", "manual-paused"] as const)("keeps a %s round unchanged", (status) => {
+      const { engine, store } = create();
+      if (status === "manual-paused") {
+        engine.command("start");
+        engine.command("pause");
+      }
+      const writes = store.snapshotWrites;
+      const failed = engine.storageFailure();
+      expect(failed.status).toBe(status);
+      expect(failed.automation.manualPauseLocked).toBe(status === "manual-paused");
+      expect(store.snapshotWrites).toBe(writes);
+    });
+
+    it("does not try to commit a round when entering the failure state", () => {
+      const { engine, clock, store } = create();
+      engine.command("start");
+      clock.advance(defaultSettings.focusDurationSeconds * 1000);
+      store.failCommit = true;
+      expect(engine.storageFailure().status).toBe("auto-paused");
+      expect(store.sessions).toHaveLength(0);
+    });
+  });
+
+  describe("snapshot checkpoints", () => {
+    it("skips unchanged idle and manually paused samples but saves presence and availability changes", () => {
+      const { engine, clock, store } = create();
+      engine.inputSample(0, true);
+      let writes = store.snapshotWrites;
+      for (let sample = 0; sample < 3; sample += 1) {
+        clock.advance(1_000);
+        engine.inputSample(0, true);
+      }
+      expect(store.snapshotWrites).toBe(writes);
+      engine.inputSample(40, true);
+      expect(store.snapshotWrites).toBe(writes + 1);
+      engine.command("start");
+      engine.command("pause");
+      writes = store.snapshotWrites;
+      clock.advance(1_000);
+      engine.inputSample(40, true);
+      expect(store.snapshotWrites).toBe(writes);
+      engine.inputSample(undefined, false);
+      expect(store.snapshotWrites).toBe(writes + 1);
+      engine.inputSample(undefined, false);
+      expect(store.snapshotWrites).toBe(writes + 1);
+    });
+
+    it("continues saving running time every input sample", () => {
+      const { engine, clock, store } = create();
+      engine.inputSample(0, true);
+      engine.command("start");
+      const writes = store.snapshotWrites;
+      for (let sample = 0; sample < 3; sample += 1) {
+        clock.advance(1_000);
+        engine.inputSample(0, true);
+        expect(store.snapshotWrites).toBe(writes + sample + 1);
+        expect(store.snapshot?.remainingMs).toBe(defaultSettings.focusDurationSeconds * 1000 - (sample + 1) * 1_000);
+      }
+    });
+  });
+
   it("does not turn an idle round or manual pause into an automatic run on suspend", () => {
     const idle = create();
     expect(idle.engine.systemSuspend().status).toBe("idle");
@@ -144,6 +393,21 @@ describe("TimerEngine", () => {
     expect(store.sessions[0]?.plannedDurationSeconds).toBe(1800);
     expect(engine.snapshot.round.kind).toBe("short-break");
     expect(store.sessions).toHaveLength(1);
+  });
+
+  it("counts committed natural completions without counting skipped rounds", () => {
+    const { engine, clock } = create();
+    expect(engine.completedRoundsRevision).toBe(0);
+    engine.command("next");
+    expect(engine.completedRoundsRevision).toBe(0);
+    engine.command("start");
+    clock.advance(defaultSettings.shortBreakDurationSeconds * 1000);
+    expect(engine.snapshot.round.kind).toBe("focus");
+    expect(engine.completedRoundsRevision).toBe(1);
+    engine.command("start");
+    clock.advance(defaultSettings.focusDurationSeconds * 1000);
+    expect(engine.snapshot.round.kind).toBe("short-break");
+    expect(engine.completedRoundsRevision).toBe(2);
   });
 
   it("finishes focus into a full automatically paused break without counting waiting time", () => {
@@ -417,10 +681,12 @@ describe("TimerEngine", () => {
     clock.advance(defaultSettings.focusDurationSeconds * 1000 + 1);
 
     expect(() => engine.snapshot).toThrow("commit failed");
+    expect(engine.completedRoundsRevision).toBe(0);
     expect(store.sessions).toHaveLength(0);
     expect(store.snapshot?.round.kind).toBe("focus");
     store.failCommit = false;
     expect(engine.snapshot.round.kind).toBe("short-break");
     expect(store.sessions).toHaveLength(1);
+    expect(engine.completedRoundsRevision).toBe(1);
   });
 });

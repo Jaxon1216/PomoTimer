@@ -26,7 +26,7 @@ subscribe(listener: (event: CoreEvent) => void): () => void
 type TimerStatus = "idle" | "running" | "auto-paused" | "manual-paused";
 type RoundKind = "focus" | "short-break" | "long-break";
 type BreakMode = "active" | "desk";
-type PauseReason = "none" | "input-away" | "break-condition" | "system-suspend" | "core-recovery" | "source-unavailable";
+type PauseReason = "none" | "input-away" | "break-condition" | "system-suspend" | "system-lock" | "core-recovery" | "source-unavailable" | "storage-unavailable";
 
 interface TimerSnapshot {
   revision: number; emittedAt: string; status: TimerStatus; remainingMs: number;
@@ -53,6 +53,12 @@ type CoreEvent =
 
 Main 每 500ms 广播权威快照；命令、输入采样、轮次变化、电源事件和设置保存走同一广播链。窗口模式事件只携带本应用的模式枚举，不携带 bounds、其他应用窗口、原始输入、屏幕或相机数据。Renderer 在初次并行读取时通过 `getWindowMode` 获得模式，再从模式切换返回值和模式事件更新展示；计时状态仍只来自 TimerSnapshot。
 
+`stats.changed` 在完成记录事务提交后或本机日期变化时发布，不为跳过轮次增加统计。`core.error` 中 `STORAGE_UNAVAILABLE/recoverable=false` 表示计时已在内存中冻结、后台写入已停止，需要重新打开应用；`COMMAND_REJECTED/recoverable=true` 等普通操作错误只显示可恢复提示，不移除正常计时视图。
+
+检测故障下显式手动继续、锁屏门禁、完成通知计数仅存在于 TimerEngine 内存，不扩展 preload allowlist。有效检测恢复后取消临时手动回退；锁屏解除本身不启动计时。静止且业务状态相同的采样不增加 revision 或写数据库；运行中保留每秒检查点，不能依赖 revision 推断采样次数。
+
 ## 5. SQLite 数据模型
 
 保留并兼容既有表：`schema_migrations`、`settings`、单行 `timer_snapshot`、`completed_focus_sessions`。只有完整结束的 focus 写入 `completed_focus_sessions`；next、reset、退出、睡眠、自动/手动暂停都不写入。`INSERT OR IGNORE` 以 UUID 防止完成事件重复。统计按 `local_date` 聚合今日、本周和最近 52 周数据。
+
+初始化、迁移或快照读取失败先复制数据库及现存 WAL/SHM 文件并关闭连接。恢复入口只在 Main 的原生对话框中提供，备份成功且用户显式选择后才归档原文件并重建；不增加 Renderer 数据库或路径能力，不修改已发布迁移。

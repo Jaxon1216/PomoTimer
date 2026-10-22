@@ -55,6 +55,21 @@ async function inspectRuntime(application: ElectronApplication): Promise<Desktop
   });
 }
 
+async function waitForInputSamples(application: ElectronApplication, count: number): Promise<void> {
+  await application.evaluate(({ powerMonitor }, target) => new Promise<void>((resolve) => {
+    const sample = powerMonitor.getSystemIdleTime;
+    let observed = 0;
+    powerMonitor.getSystemIdleTime = () => {
+      const idle = sample();
+      if (++observed >= target) {
+        powerMonitor.getSystemIdleTime = sample;
+        resolve();
+      }
+      return idle;
+    };
+  }), count);
+}
+
 async function settleVisuals(page: import("@playwright/test").Page): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready;
@@ -541,9 +556,7 @@ test("confirms only the observed break countdown and discards it after renewed i
   }));
   const firstSample = await window.evaluate(() => window.pomodoro.getSnapshot());
   expect(firstSample.status).toBe("auto-paused");
-  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).revision, {
-    intervals: [50], timeout: 4_000,
-  }).toBeGreaterThanOrEqual(firstSample.revision + 2);
+  await waitForInputSamples(app, 3);
   const unconfirmed = await window.evaluate(() => window.pomodoro.getSnapshot());
   expect(unconfirmed.status).toBe("auto-paused");
   expect(unconfirmed.remainingMs).toBe(unconfirmed.round.totalDurationMs);
@@ -570,9 +583,7 @@ test("confirms only the observed break countdown and discards it after renewed i
     intervals: [50], timeout: 4_000,
   }).toBe("auto-paused");
   const paused = await window.evaluate(() => window.pomodoro.getSnapshot());
-  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).revision, {
-    intervals: [50], timeout: 2_000,
-  }).toBeGreaterThan(paused.revision);
+  await waitForInputSamples(app, 1);
   const stillPaused = await window.evaluate(() => window.pomodoro.getSnapshot());
   expect(stillPaused.status).toBe("auto-paused");
   expect(stillPaused.remainingMs).toBe(paused.remainingMs);
@@ -691,4 +702,116 @@ test("rejects mismatched diagnostic data directories before opening either datab
   expect(result.stderr).toContain("诊断启动的数据目录与预期目录不匹配");
   expect(existsSync(join(requestedDirectory, "pomodoro.sqlite"))).toBe(false);
   expect(existsSync(join(expectedDirectory, "pomodoro.sqlite"))).toBe(false);
+});
+
+test("a second launch wakes the existing instance without starting another timer", async ({ launchApplication }, testInfo) => {
+  const userData = testInfo.outputPath("user-data");
+  const app = await launchApplication(userData);
+  const window = await app.firstWindow();
+  await expect(window.locator("time")).toHaveText("30:00");
+  await window.evaluate(() => window.pomodoro.command("next"));
+  const before = await window.evaluate(() => window.pomodoro.getSnapshot());
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.hide());
+  const executablePath = await app.evaluate(() => process.execPath);
+  const result = spawnSync(executablePath, [applicationEntry, `--user-data-dir=${userData}`], {
+    cwd: desktopDirectory,
+    env: { ...process.env, POMODORO_DIAGNOSTICS: "1", POMODORO_EXPECTED_USER_DATA: userData },
+    timeout: 10_000, encoding: "utf8", killSignal: "SIGKILL",
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(0);
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible())).toBe(true);
+  expect((await inspectRuntime(app)).pid).not.toBe(result.pid);
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).round).toEqual(before.round);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+});
+
+test("invalid settings remain editable without hiding the running timer", async ({ launchApplication }, testInfo) => {
+  const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await openMore(window);
+  await window.getByRole("menuitem", { name: "打开设置" }).click();
+  await window.getByLabel("专注时长").fill("");
+  await window.getByRole("button", { name: "保存设置" }).click();
+  await expect(window.getByLabel("专注时长")).toHaveAttribute("aria-invalid", "true");
+  await expect(window.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
+  expect((await window.evaluate(() => window.pomodoro.getSettings())).focusDurationSeconds).toBe(1800);
+  await window.getByLabel("专注时长").fill("25");
+  await window.getByRole("button", { name: "保存设置" }).click();
+  await expect(window.getByText("已保存", { exact: true })).toBeVisible();
+  await window.getByRole("button", { name: "返回计时器" }).click();
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).status).toBe("running");
+});
+
+test("manual input fallback survives failed samples and lock-screen freezes until unlock", async ({ launchApplication }, testInfo) => {
+  const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => { throw new Error("test source failure"); }; });
+  await expect(window.getByText("输入检测不可用", { exact: true })).toBeVisible();
+  await window.getByRole("button", { name: "继续计时" }).click();
+  const before = await window.evaluate(() => window.pomodoro.getSnapshot());
+  await window.waitForTimeout(2200);
+  const manual = await window.evaluate(() => window.pomodoro.getSnapshot());
+  expect(manual.status).toBe("running");
+  expect(manual.remainingMs).toBeLessThan(before.remainingMs - 1500);
+  await app.evaluate(({ powerMonitor }) => {
+    powerMonitor.getSystemIdleTime = () => 0;
+    powerMonitor.emit("lock-screen");
+  });
+  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).automation.pauseReason).toBe("system-lock");
+  const locked = await window.evaluate(() => window.pomodoro.getSnapshot());
+  await waitForInputSamples(app, 2);
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).remainingMs).toBe(locked.remainingMs);
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.emit("unlock-screen"); });
+  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).status).toBe("running");
+});
+
+test("publishes committed statistics while the statistics page stays open", async ({ launchApplication }, testInfo) => {
+  const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await window.getByRole("button", { name: "打开统计" }).click();
+  await expect(window.locator(".statsHero strong")).toHaveText("0 分钟");
+  // Advance the injected monotonic source in this test-owned Main only.
+  await app.evaluate(() => {
+    const original = performance.now.bind(performance);
+    Object.defineProperty(performance, "now", { configurable: true, value: () => original() + 1_800_001 });
+  });
+  await expect(window.locator(".statsHero strong")).toHaveText("30 分钟");
+  expect((await window.evaluate(() => window.pomodoro.getStatistics())).today.completedFocusRounds).toBe(1);
+  await expect(window.locator(".heatmap")).toBeVisible();
+  await expect.poll(() => window.locator(".heatmapFrame").evaluate((frame) => frame.scrollLeft)).toBeGreaterThan(0);
+});
+
+test("a runtime SQLite failure freezes the core and remains visible after renderer reload", async ({ launchApplication }, testInfo) => {
+  const userData = testInfo.outputPath("user-data");
+  const app = await launchApplication(userData);
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  await window.getByRole("button", { name: "开始计时" }).click();
+  const executablePath = await app.evaluate(() => process.execPath);
+  const result = spawnSync(executablePath, ["-e", `
+    const Database = require("better-sqlite3");
+    const db = new Database(process.env.POMODORO_TEST_DATABASE);
+    try { db.exec("CREATE TRIGGER reject_checkpoints BEFORE UPDATE ON timer_snapshot BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END"); }
+    finally { db.close(); }
+  `], {
+    cwd: desktopDirectory,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", POMODORO_TEST_DATABASE: join(userData, "pomodoro.sqlite") },
+    timeout: 10_000, encoding: "utf8", killSignal: "SIGKILL",
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  await expect(window.getByRole("heading", { name: "本地存储不可用" })).toBeVisible();
+  await expect(window.getByText("计时已安全暂停，请重新打开应用后重试。", { exact: true })).toBeVisible();
+  await expect(window.getByRole("button", { name: "开始计时" })).toHaveCount(0);
+  await expect(window.evaluate(() => window.pomodoro.command("resume"))).rejects.toThrow(/本地数据不可用/);
+  await window.reload();
+  await expect(window.getByRole("heading", { name: "计时核心不可用" })).toBeVisible();
+  await expect(window.getByRole("button", { name: "开始计时" })).toHaveCount(0);
 });

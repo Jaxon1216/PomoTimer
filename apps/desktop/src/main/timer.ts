@@ -55,6 +55,11 @@ export class TimerEngine {
   private settingsValue: Settings;
   private inputAvailable = true;
   private inputPresence: Presence = "unknown";
+  private manualInputFallback = false;
+  private screenLocked = false;
+  private storageFailed = false;
+  private completedRoundsRevisionValue = 0;
+  private persistedState = "";
   private pendingBreakCountdown: { startedAt: number; idleStartedAt: number } | undefined;
   private activeCycleRounds: number;
   private readonly clock: TimerClock;
@@ -77,12 +82,13 @@ export class TimerEngine {
             manualPauseLocked: persisted.status === "manual-paused"
               ? true
               : persisted.automation.manualPauseLocked,
-            pauseReason: persisted.status === "running"
+            pauseReason: persisted.status === "running" || (persisted.status === "auto-paused" && persisted.automation.pauseReason === "system-lock")
               ? "core-recovery"
               : persisted.automation.pauseReason,
           },
         }
       : this.initialSnapshot();
+    this.inputAvailable = this.snapshotValue.automation.inputMonitoringAvailable;
     this.persist();
   }
 
@@ -95,11 +101,16 @@ export class TimerEngine {
     return this.snapshotValue;
   }
 
+  get completedRoundsRevision(): number {
+    return this.completedRoundsRevisionValue;
+  }
+
   setInputAvailability(available: boolean): TimerSnapshot {
     return this.inputSample(undefined, available);
   }
 
   applySettings(patch: Partial<Settings>): Settings {
+    this.assertStorageAvailable();
     this.tick();
     if (patch.inputIdleThresholdSeconds !== undefined && patch.inputIdleThresholdSeconds !== this.settingsValue.inputIdleThresholdSeconds) {
       this.pendingBreakCountdown = undefined;
@@ -111,6 +122,8 @@ export class TimerEngine {
   }
 
   command(command: TimerCommand): TimerSnapshot {
+    this.assertStorageAvailable();
+    if (this.screenLocked && (command === "start" || command === "resume")) throw new Error("锁屏期间不能开始计时");
     this.pendingBreakCountdown = undefined;
     this.tick();
     const now = this.clock.now();
@@ -119,6 +132,7 @@ export class TimerEngine {
       const canStart = this.snapshotValue.status === "idle"
         || (this.snapshotValue.round.kind !== "focus" && this.snapshotValue.status === "auto-paused");
       if (!canStart) throw new Error("当前轮次不能开始");
+      this.manualInputFallback = !this.inputAvailable;
       this.startRunning(now);
     } else if (command === "pause") {
       if (this.snapshotValue.status !== "running") throw new Error("当前轮次未在运行");
@@ -126,11 +140,13 @@ export class TimerEngine {
       this.snapshotValue.status = "manual-paused";
       this.snapshotValue.automation.manualPauseLocked = true;
       this.snapshotValue.automation.pauseReason = "none";
+      this.manualInputFallback = false;
     } else if (command === "resume") {
       if (this.snapshotValue.status !== "auto-paused" && this.snapshotValue.status !== "manual-paused") {
         throw new Error("当前轮次不能继续");
       }
       this.snapshotValue.automation.manualPauseLocked = false;
+      this.manualInputFallback = !this.inputAvailable;
       this.startRunning(now);
     } else if (command === "reset") {
       this.snapshotValue.status = "idle";
@@ -138,6 +154,7 @@ export class TimerEngine {
       this.snapshotValue.automation.manualPauseLocked = false;
       this.snapshotValue.automation.pauseReason = "none";
       this.runningSince = undefined;
+      this.manualInputFallback = false;
     } else {
       this.advanceRound();
     }
@@ -146,25 +163,28 @@ export class TimerEngine {
   }
 
   inputSample(idleSeconds: number | undefined, available = true): TimerSnapshot {
+    if (this.storageFailed) return timerSnapshotSchema.parse(this.snapshotValue);
     this.tick();
-    this.inputAvailable = available;
-    this.snapshotValue.automation.inputMonitoringAvailable = available;
     const failed = !available || idleSeconds === undefined || !Number.isFinite(idleSeconds);
+    this.inputAvailable = !failed;
+    this.snapshotValue.automation.inputMonitoringAvailable = !failed;
     if (failed) {
       this.pendingBreakCountdown = undefined;
       this.inputPresence = "unknown";
-      if (!this.snapshotValue.automation.manualPauseLocked && this.snapshotValue.status === "running") {
+      if (!this.manualInputFallback && !this.snapshotValue.automation.manualPauseLocked && this.snapshotValue.status === "running") {
         this.freeze(this.clock.now());
         this.snapshotValue.status = "auto-paused";
         this.snapshotValue.automation.pauseReason = "source-unavailable";
-      } else if (this.snapshotValue.status === "auto-paused") {
+      } else if (!this.screenLocked && this.snapshotValue.status === "auto-paused") {
         this.snapshotValue.automation.pauseReason = "source-unavailable";
       }
       return this.emit();
     }
 
+    this.manualInputFallback = false;
     this.inputPresence = idleSeconds >= this.settingsValue.inputIdleThresholdSeconds ? "away" : "present";
     this.snapshotValue.automation.inputPresence = this.inputPresence;
+    if (this.screenLocked) return this.emit();
     const now = this.clock.now();
     const confirmedCountdownMs = this.observeBreakCountdown(idleSeconds, now);
     if (!this.snapshotValue.automation.manualPauseLocked) {
@@ -186,6 +206,7 @@ export class TimerEngine {
 
   systemSuspend(): TimerSnapshot {
     this.pendingBreakCountdown = undefined;
+    this.manualInputFallback = false;
     this.tick();
     // Sleep only interrupts an active timer. Idle and manually paused rounds
     // must remain untouched so wake-up cannot start them implicitly.
@@ -194,6 +215,51 @@ export class TimerEngine {
       this.snapshotValue.status = "auto-paused";
       this.snapshotValue.automation.pauseReason = "system-suspend";
     }
+    return this.emit();
+  }
+
+  // 领域：Timer / 锁屏状态
+  // 顺序：Main lock-screen -> systemLock -> inputSample；unlock-screen -> systemUnlock。
+  // 作用：锁屏冻结活动轮次，屏蔽输入自动化直到解锁后的有效样本。
+  // 原因：锁屏时系统输入仍可能报告在场，不能据此继续专注或开始休息。
+  // 边界：门禁仅在当前进程内保存；idle 和手动暂停锁保持不变。
+  systemLock(): TimerSnapshot {
+    this.pendingBreakCountdown = undefined;
+    this.manualInputFallback = false;
+    this.tick();
+    this.screenLocked = true;
+    if (this.snapshotValue.status === "running") {
+      this.freeze(this.clock.now());
+      this.snapshotValue.status = "auto-paused";
+    }
+    if (this.snapshotValue.status === "auto-paused" && !this.storageFailed) this.snapshotValue.automation.pauseReason = "system-lock";
+    return this.emit();
+  }
+
+  systemUnlock(): TimerSnapshot {
+    this.screenLocked = false;
+    if (this.snapshotValue.automation.pauseReason === "system-lock") {
+      this.snapshotValue.automation.pauseReason = !this.inputAvailable
+        ? "source-unavailable"
+        : this.snapshotValue.round.kind === "focus" ? "input-away" : "break-condition";
+    }
+    return this.emit();
+  }
+
+  // 领域：Timer / 存储故障
+  // 顺序：Main 捕获 Store 异常 -> storageFailure -> freeze -> 只读快照。
+  // 作用：在内存中安全暂停，并拒绝当前进程内的后续计时和设置变更。
+  // 原因：错误处理不能再次访问已经失败的 Store，也不能触发轮次完成提交。
+  // 边界：不持久化故障状态；只有重启并成功打开数据库后才恢复写入。
+  storageFailure(): TimerSnapshot {
+    this.storageFailed = true;
+    this.pendingBreakCountdown = undefined;
+    this.manualInputFallback = false;
+    if (this.snapshotValue.status === "running") {
+      this.freeze(this.clock.now());
+      this.snapshotValue.status = "auto-paused";
+    }
+    if (this.snapshotValue.status === "auto-paused") this.snapshotValue.automation.pauseReason = "storage-unavailable";
     return this.emit();
   }
 
@@ -302,6 +368,8 @@ export class TimerEngine {
       } else {
         this.persist();
       }
+      this.persistedState = this.snapshotState();
+      this.completedRoundsRevisionValue += 1;
     } catch (error) {
       // Keep the just-finished round retryable. The Store transaction has
       // rolled back both the record and snapshot when this path is reached.
@@ -314,6 +382,7 @@ export class TimerEngine {
 
   private moveToNextRound(): void {
     this.pendingBreakCountdown = undefined;
+    this.manualInputFallback = false;
     const current = this.snapshotValue.round;
     const nextFocus = current.kind === "focus"
       ? (current.focusRoundNumber ?? 1) + 1
@@ -343,15 +412,32 @@ export class TimerEngine {
     this.moveToNextRound();
   }
 
+  // 领域：Timer / 检查点
+  // 顺序：命令或输入采样 -> emit -> snapshotState -> persist。
+  // 作用：只在剩余时间或业务状态改变时更新检查点。
+  // 原因：静止轮次无需为每次相同输入写入数据库，运行中仍持续保存剩余时间。
+  // 边界：候选休息计时仅存在内存中；revision 和 emittedAt 不触发独立写入。
   private emit(): TimerSnapshot {
+    this.snapshotValue.automation.inputPresence = this.inputPresence;
+    if (!this.storageFailed && this.snapshotState() === this.persistedState) return timerSnapshotSchema.parse(this.snapshotValue);
     this.snapshotValue.revision += 1;
     this.snapshotValue.emittedAt = new Date().toISOString();
-    this.snapshotValue.automation.inputPresence = this.inputPresence;
     this.persist();
     return timerSnapshotSchema.parse({ ...this.snapshotValue });
   }
 
   private persist(): void {
+    if (this.storageFailed) return;
     this.store.saveSnapshot(this.snapshotValue);
+    this.persistedState = this.snapshotState();
+  }
+
+  private snapshotState(): string {
+    const { round, activeCycleRounds, status, remainingMs, automation } = this.snapshotValue;
+    return JSON.stringify({ round, activeCycleRounds, status, remainingMs, automation });
+  }
+
+  private assertStorageAvailable(): void {
+    if (this.storageFailed) throw new Error("本地存储不可用，请重新启动应用后重试");
   }
 }
