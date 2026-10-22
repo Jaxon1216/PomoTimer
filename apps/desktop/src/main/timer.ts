@@ -55,6 +55,7 @@ export class TimerEngine {
   private settingsValue: Settings;
   private inputAvailable = true;
   private inputPresence: Presence = "unknown";
+  private pendingBreakCountdown: { startedAt: number; idleStartedAt: number } | undefined;
   private activeCycleRounds: number;
   private readonly clock: TimerClock;
   private readonly store: TimerStore;
@@ -100,6 +101,9 @@ export class TimerEngine {
 
   applySettings(patch: Partial<Settings>): Settings {
     this.tick();
+    if (patch.inputIdleThresholdSeconds !== undefined && patch.inputIdleThresholdSeconds !== this.settingsValue.inputIdleThresholdSeconds) {
+      this.pendingBreakCountdown = undefined;
+    }
     this.settingsValue = { ...this.settingsValue, ...patch, version: 1 };
     this.store.saveSettings?.(this.settingsValue);
     this.persist();
@@ -107,6 +111,7 @@ export class TimerEngine {
   }
 
   command(command: TimerCommand): TimerSnapshot {
+    this.pendingBreakCountdown = undefined;
     this.tick();
     const now = this.clock.now();
 
@@ -146,6 +151,7 @@ export class TimerEngine {
     this.snapshotValue.automation.inputMonitoringAvailable = available;
     const failed = !available || idleSeconds === undefined || !Number.isFinite(idleSeconds);
     if (failed) {
+      this.pendingBreakCountdown = undefined;
       this.inputPresence = "unknown";
       if (!this.snapshotValue.automation.manualPauseLocked && this.snapshotValue.status === "running") {
         this.freeze(this.clock.now());
@@ -159,6 +165,8 @@ export class TimerEngine {
 
     this.inputPresence = idleSeconds >= this.settingsValue.inputIdleThresholdSeconds ? "away" : "present";
     this.snapshotValue.automation.inputPresence = this.inputPresence;
+    const now = this.clock.now();
+    const confirmedCountdownMs = this.observeBreakCountdown(idleSeconds, now);
     if (!this.snapshotValue.automation.manualPauseLocked) {
       const shouldRun = this.snapshotValue.round.kind === "focus" ? this.inputPresence === "present" : this.inputPresence === "away";
       const conditionReason = this.snapshotValue.round.kind === "focus" ? "input-away" : "break-condition";
@@ -167,7 +175,8 @@ export class TimerEngine {
         this.snapshotValue.status = "auto-paused";
         this.snapshotValue.automation.pauseReason = conditionReason;
       } else if (this.snapshotValue.status === "auto-paused" && shouldRun) {
-        this.startRunning(this.clock.now());
+        this.startRunning(now - confirmedCountdownMs);
+        if (confirmedCountdownMs > 0) this.tick();
       } else if (this.snapshotValue.status === "auto-paused" && this.snapshotValue.automation.pauseReason === "source-unavailable") {
         this.snapshotValue.automation.pauseReason = conditionReason;
       }
@@ -176,6 +185,7 @@ export class TimerEngine {
   }
 
   systemSuspend(): TimerSnapshot {
+    this.pendingBreakCountdown = undefined;
     this.tick();
     // Sleep only interrupts an active timer. Idle and manually paused rounds
     // must remain untouched so wake-up cannot start them implicitly.
@@ -185,6 +195,38 @@ export class TimerEngine {
       this.snapshotValue.automation.pauseReason = "system-suspend";
     }
     return this.emit();
+  }
+
+  // 领域：Timer / 休息倒计时
+  // 顺序：自动计时链第 4 站，Main 输入采样 -> inputSample -> observeBreakCountdown -> startRunning。
+  // 作用：确认空闲阈值前，暂记当前休息轮最后最多 10 秒的倒计时。
+  // 原因：达到阈值后才扣除已观测的候选时长，避免等待确认的时间被遗漏。
+  // 边界：候选仅在内存中；不补计休息轮开始、故障、睡眠或重启之前的时间。
+  private observeBreakCountdown(idleSeconds: number, now: number): number {
+    if (this.snapshotValue.round.kind === "focus" || this.snapshotValue.status !== "auto-paused" || this.snapshotValue.automation.manualPauseLocked) {
+      this.pendingBreakCountdown = undefined;
+      return 0;
+    }
+
+    const threshold = this.settingsValue.inputIdleThresholdSeconds;
+    const idleStartedAt = now - idleSeconds * 1000;
+    if (idleSeconds < Math.max(0, threshold - 10)
+      || (this.pendingBreakCountdown && idleStartedAt - this.pendingBreakCountdown.idleStartedAt > 1000)) {
+      this.pendingBreakCountdown = undefined;
+    }
+
+    if (idleSeconds >= threshold) {
+      const confirmedMs = this.pendingBreakCountdown
+        ? Math.max(0, Math.min(10_000, Math.floor(now - this.pendingBreakCountdown.startedAt), this.snapshotValue.remainingMs))
+        : 0;
+      this.pendingBreakCountdown = undefined;
+      return confirmedMs;
+    }
+
+    if (idleSeconds >= Math.max(0, threshold - 10)) {
+      this.pendingBreakCountdown ??= { startedAt: now, idleStartedAt };
+    }
+    return 0;
   }
 
   private initialSnapshot(): TimerSnapshot {
@@ -208,6 +250,7 @@ export class TimerEngine {
   }
 
   private startRunning(now: number): void {
+    this.pendingBreakCountdown = undefined;
     this.snapshotValue.status = "running";
     this.snapshotValue.automation.pauseReason = "none";
     this.runningSince = now;
@@ -270,6 +313,7 @@ export class TimerEngine {
   }
 
   private moveToNextRound(): void {
+    this.pendingBreakCountdown = undefined;
     const current = this.snapshotValue.round;
     const nextFocus = current.kind === "focus"
       ? (current.focusRoundNumber ?? 1) + 1

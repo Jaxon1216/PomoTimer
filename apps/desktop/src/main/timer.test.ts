@@ -61,6 +61,15 @@ function create() {
   return { store, clock, engine };
 }
 
+function observeIdle(engine: TimerEngine, clock: FakeClock, firstSecond: number, lastSecond: number): TimerSnapshot {
+  let snapshot = engine.snapshot;
+  for (let idleSeconds = firstSecond; idleSeconds <= lastSecond; idleSeconds += 1) {
+    clock.advance(1_000);
+    snapshot = engine.inputSample(idleSeconds, true);
+  }
+  return snapshot;
+}
+
 describe("TimerEngine", () => {
   it("locks automatic recovery after a manual pause, including restart", () => {
     const first = create();
@@ -182,6 +191,194 @@ describe("TimerEngine", () => {
     expect(stillPaused.automation.manualPauseLocked).toBe(true);
     expect(stillPaused.remainingMs).toBe(paused.remainingMs);
     expect(engine.command("resume").status).toBe("running");
+  });
+
+  describe("confirmed break countdown", () => {
+    it.each(["active", "desk"] as const)("confirms the preceding ten seconds once for a %s break", (breakMode) => {
+      const { engine, clock } = create();
+      engine.applySettings({ defaultBreakMode: breakMode });
+      const waiting = engine.command("next");
+      expect(waiting.round.breakMode).toBe(breakMode);
+      expect(engine.inputSample(29, true).remainingMs).toBe(waiting.remainingMs);
+
+      for (let idleSeconds = 30; idleSeconds < 40; idleSeconds += 1) {
+        clock.advance(1_000);
+        const pending = engine.inputSample(idleSeconds, true);
+        expect(pending.status).toBe("auto-paused");
+        expect(pending.remainingMs).toBe(waiting.remainingMs);
+      }
+
+      const confirmed = observeIdle(engine, clock, 40, 40);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
+      expect(engine.inputSample(40, true).remainingMs).toBe(confirmed.remainingMs);
+      expect(observeIdle(engine, clock, 41, 41).remainingMs).toBe(waiting.remainingMs - 11_000);
+    });
+
+    it("discards the unconfirmed countdown when input resumes at 35 seconds", () => {
+      const { engine, clock } = create();
+      const waiting = engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+      expect(engine.inputSample(0, true).remainingMs).toBe(waiting.remainingMs);
+
+      const confirmed = observeIdle(engine, clock, 1, 40);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
+    });
+
+    it("does not carry a countdown across input hidden by a delayed sample", () => {
+      const { engine, clock } = create();
+      const waiting = engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+
+      clock.advance(60_000);
+      const confirmed = engine.inputSample(45, true);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs);
+    });
+
+    it("caps the confirmed countdown at ten seconds after delayed continuous inactivity", () => {
+      const { engine, clock } = create();
+      const waiting = engine.command("next");
+      engine.inputSample(30, true);
+
+      clock.advance(60_000);
+      const confirmed = engine.inputSample(90, true);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
+    });
+
+    it("only confirms time observed after entering the current break", () => {
+      const { engine, clock } = create();
+      engine.command("start");
+      observeIdle(engine, clock, 30, 39);
+      const waiting = engine.command("next");
+      engine.inputSample(39, true);
+
+      const confirmed = observeIdle(engine, clock, 40, 40);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 1_000);
+    });
+
+    it.each(["start", "resume"] as const)("discards the pending countdown on manual %s and preserves the pause lock", (command) => {
+      const { engine, clock } = create();
+      const waiting = engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+      expect(engine.command(command).remainingMs).toBe(waiting.remainingMs);
+      engine.command("pause");
+
+      const paused = observeIdle(engine, clock, 36, 45);
+      expect(paused.status).toBe("manual-paused");
+      expect(paused.remainingMs).toBe(waiting.remainingMs);
+      expect(engine.command("resume").remainingMs).toBe(waiting.remainingMs);
+      expect(engine.inputSample(45, true).remainingMs).toBe(waiting.remainingMs);
+    });
+
+    it("discards the pending countdown on reset without automatically starting the idle round", () => {
+      const { engine, clock } = create();
+      const waiting = engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+      expect(engine.command("reset").remainingMs).toBe(waiting.remainingMs);
+
+      const idle = observeIdle(engine, clock, 36, 40);
+      expect(idle.status).toBe("idle");
+      expect(idle.remainingMs).toBe(waiting.remainingMs);
+      expect(engine.command("start").remainingMs).toBe(waiting.remainingMs);
+    });
+
+    it("does not carry an unconfirmed countdown into a later break", () => {
+      const { engine, clock } = create();
+      engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+      expect(engine.command("next").status).toBe("idle");
+      const waiting = engine.command("next");
+
+      const confirmed = engine.inputSample(40, true);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs);
+    });
+
+    it.each(["input failure", "suspend", "restart"] as const)("discards an unconfirmed countdown after %s", (interruption) => {
+      const { engine: originalEngine, clock, store } = create();
+      let engine = originalEngine;
+      const waiting = engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+      if (interruption === "input failure") engine.inputSample(undefined, false);
+      else if (interruption === "suspend") engine.systemSuspend();
+      else engine = new TimerEngine(store, clock);
+
+      clock.advance(20_000);
+      const confirmed = engine.inputSample(55, true);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs);
+    });
+
+    it("uses a fresh pending interval after the idle threshold changes", () => {
+      const { engine, clock } = create();
+      const waiting = engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+      engine.applySettings({ inputIdleThresholdSeconds: 75 });
+      clock.advance(40_000);
+
+      const confirmed = engine.inputSample(75, true);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs);
+    });
+
+    it.each([75, 600])("applies the pending interval relative to a configured threshold of %s seconds", (threshold) => {
+      const { engine, clock } = create();
+      engine.applySettings({ inputIdleThresholdSeconds: threshold });
+      const waiting = engine.command("next");
+      expect(observeIdle(engine, clock, threshold - 10, threshold - 1).remainingMs).toBe(waiting.remainingMs);
+      expect(observeIdle(engine, clock, threshold, threshold).remainingMs).toBe(waiting.remainingMs - 10_000);
+    });
+
+    it("waits for ten continuous idle seconds at the minimum threshold despite repeated active input", () => {
+      const { engine, clock } = create();
+      engine.applySettings({ inputIdleThresholdSeconds: 10 });
+      const waiting = engine.command("next");
+
+      for (let sample = 0; sample < 20; sample += 1) {
+        clock.advance(1_000);
+        const activeInput = engine.inputSample(0, true);
+        expect(activeInput.status).toBe("auto-paused");
+        expect(activeInput.remainingMs).toBe(waiting.remainingMs);
+      }
+
+      const pending = observeIdle(engine, clock, 1, 9);
+      expect(pending.status).toBe("auto-paused");
+      expect(pending.remainingMs).toBe(waiting.remainingMs);
+      const confirmed = observeIdle(engine, clock, 10, 10);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
+    });
+
+    it("preserves the pending countdown while changing the theme", () => {
+      const { engine, clock } = create();
+      const waiting = engine.command("next");
+      observeIdle(engine, clock, 30, 35);
+      engine.applySettings({ theme: "dark" });
+
+      const confirmed = observeIdle(engine, clock, 36, 40);
+      expect(confirmed.status).toBe("running");
+      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
+    });
+
+    it("finishes only the current break when the confirmed interval exceeds its remaining time", () => {
+      const { engine, clock, store } = create();
+      engine.command("next");
+      engine.inputSample(40, true);
+      clock.advance(defaultSettings.shortBreakDurationSeconds * 1000 - 5_000);
+      const paused = engine.inputSample(0, true);
+      expect(paused.remainingMs).toBe(5_000);
+
+      const nextFocus = observeIdle(engine, clock, 30, 40);
+      expect(nextFocus.round.kind).toBe("focus");
+      expect(nextFocus.status).toBe("idle");
+      expect(nextFocus.remainingMs).toBe(defaultSettings.focusDurationSeconds * 1000);
+      expect(observeIdle(engine, clock, 41, 42).remainingMs).toBe(nextFocus.remainingMs);
+      expect(store.sessions).toHaveLength(0);
+    });
   });
 
   it("keeps a changed cycle length for the next cycle across restart", () => {
