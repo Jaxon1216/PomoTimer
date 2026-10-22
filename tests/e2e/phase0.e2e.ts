@@ -257,7 +257,9 @@ test("starts through the restricted preload bridge and preserves native settings
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
 
-  await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
+  // A cold Windows runner can still be loading the renderer after the default
+  // interactive assertion timeout; startup has its own bounded budget.
+  await expect(window.getByRole("heading", { name: "专注" })).toBeVisible({ timeout: 15_000 });
   await expect(window.locator("time")).toHaveText("30:00");
   await settleVisuals(window);
   await assertTimerLayout(window, "vertical");
