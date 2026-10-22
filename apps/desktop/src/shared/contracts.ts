@@ -10,7 +10,7 @@ export const presenceSourceSchema = z.enum(["input", "camera"]);
 export type PresenceSource = z.infer<typeof presenceSourceSchema>;
 export const breakModeSchema = z.enum(["active", "desk"]);
 export type BreakMode = z.infer<typeof breakModeSchema>;
-export const pauseReasonSchema = z.enum(["none", "input-away", "break-condition", "system-suspend", "core-recovery", "source-unavailable"]);
+export const pauseReasonSchema = z.enum(["none", "input-away", "break-condition", "system-suspend", "system-lock", "core-recovery", "source-unavailable", "storage-unavailable"]);
 export type PauseReason = z.infer<typeof pauseReasonSchema>;
 
 // WindowMode 是主进程确认的窗口呈现形态。

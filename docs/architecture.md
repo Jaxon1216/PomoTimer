@@ -17,6 +17,8 @@ SQLite in app.getPath("userData")
 
 不使用 Go、Rust、侧车、JSON-RPC、HTTP、WebSocket 或 Node 子进程。这样计时、托盘、通知、系统输入采样和持久化都由一个权威状态直接驱动，renderer 关闭或未轮询时计时仍继续。
 
+Main 在就绪及打开数据库之前取得单实例锁；同一 userData 的第二次启动只唤起已有窗口。独立临时数据目录的测试仍可并行拥有各自实例。
+
 ## 2. 进程边界
 
 React 只渲染快照、导航设置/统计视图、维护临时表单，并显示 Main 返回或广播的窗口模式。Preload 只暴露 `getSnapshot`、`command`、`getSettings`、`updateSettings`、`getCapabilities`、`getStatistics`、`getWindowMode`、`setWindowMode`、`subscribe`。Main 验证调用来源和 payload，广播经 Zod 校验的状态事件。
@@ -29,7 +31,9 @@ React 只渲染快照、导航设置/统计视图、维护临时表单，并显�
 
 - `powerMonitor.getSystemIdleTime()` 每秒采样。仅传递闲置秒数，不传递输入内容。TimerEngine 使用单调时钟为当前休息轮保留阈值前最多 10 秒的倒计时候选，达到阈值后才确认扣时；候选只在内存中，输入回归、手动操作、检测失败、睡眠、重启、切轮或阈值变化会清除，不补计跨轮或离线时间。
 - `powerMonitor` 的 suspend/resume 事件让运行轮次进入 `auto-paused`，恢复后由用户或安全自动条件继续。
+- `lock-screen/unlock-screen` 直接驱动 TimerEngine 锁屏门禁；锁屏期间输入不得恢复计时，解锁后等待下一有效样本。检测持续失败时，用户显式继续启用临时手动回退，下一有效样本、锁屏、睡眠或重启取消回退。
 - Tray 菜单、窗口、通知都调用同一 TimerEngine，不复制状态。
+- Tray 只在展示秒数、可用操作或状态改变时重建菜单；完成通知依赖成功持久化后的完成计数，跳过轮次不发“轮次完成”。
 - 关闭窗口在 Windows 上隐藏到托盘，退出菜单设置退出标记后真正退出；macOS 遵循应用生命周期。
 - `contextIsolation`、sandbox、CSP、禁止导航和外部链接 allowlist 必须保持。
 - macOS 窗口使用 `hiddenInset` 时，Main 仅配置原生 traffic-light 位置；Renderer 根据浏览器平台标记预留受控标题栏安全区。Windows 使用默认原生标题栏，不继承 macOS 留白，最小尺寸换算仍以内容区域为准。
@@ -43,6 +47,12 @@ React 只渲染快照、导航设置/统计视图、维护临时表单，并显�
 
 `better-sqlite3` 12.x 是当前 Electron 33 / Node 20 构建目标的实现选择。打包前由 electron-builder 重建原生模块；升级 Electron 或数据库驱动时必须重新验证构建。
 
+静止状态对相同业务快照去重，运行中保留每秒检查点。初始化失败由 Store 复制数据库及现存 WAL/SHM 到时间戳备份目录并关闭连接；Main 默认退出，仅在用户明确选择后归档原文件并重建。运行时存储异常由 Main 统一捕获，调用 TimerEngine 的无写入故障冻结接口，停止后台轮询并广播不可恢复 `core.error`；退出不再尝试写入失败的连接。
+
+完成事务提交后，Store 的进程内完成修订号驱动 Main 发布 `stats.changed`。日期变化也触发统计刷新；所有统计日期由同一墙钟采样以本地日历推算，计时仍只用单调时钟。
+
 ## 5. 测试边界
 
 `TimerEngine` 用注入的单调时钟、墙钟和 Store 独立测试；Renderer 测试验证 Main 模式事件、菜单可达性、休息自动等待文案、故障可见和布局操作不发送计时命令。Electron E2E 验证真实 preload/IPC、显式模式切换与尺寸恢复、常规窄矮布局、控制、设置和事件同步。macOS/Windows 的 idle、通知、托盘和睡眠恢复仍需真实设备手工验证。
+
+`npm run test:store` 使用与 Electron 相同 ABI 的运行时验证真实 SQLite 的旧库兼容、校验和、事务回滚、去重及包含 WAL 的恢复副本。普通 PR CI 与发布 CI 均运行原生数据库测试和 Electron E2E；模拟电源事件只验证事件接线，不能替代真实锁屏和睡眠验收。

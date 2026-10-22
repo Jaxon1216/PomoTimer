@@ -51,6 +51,10 @@ function statusText(snapshot: TimerSnapshot): string {
       return "输入检测不可用";
     case "system-suspend":
       return "系统恢复后已暂停";
+    case "system-lock":
+      return "锁屏已暂停";
+    case "storage-unavailable":
+      return "本地存储不可用";
     case "core-recovery":
       return "应用恢复后已暂停";
     default:
@@ -272,6 +276,18 @@ function TimerView({
   );
 }
 
+const numericSettings = {
+  focusDurationSeconds: { label: "专注时长", min: 5, max: 120, scale: 60, hint: "分钟 · 下一轮生效" },
+  shortBreakDurationSeconds: { label: "短休时长", min: 1, max: 60, scale: 60, hint: "分钟 · 下一轮生效" },
+  longBreakDurationSeconds: { label: "长休时长", min: 1, max: 90, scale: 60, hint: "分钟 · 下一轮生效" },
+  inputIdleThresholdSeconds: { label: "输入闲置阈值", min: 10, max: 600, scale: 1, hint: "秒 · 下次输入样本生效" },
+} as const;
+type NumericSetting = keyof typeof numericSettings;
+const numericSettingKeys = Object.keys(numericSettings) as NumericSetting[];
+function settingsNumbers(settings: Settings): Record<NumericSetting, string> {
+  return Object.fromEntries(numericSettingKeys.map((key) => [key, String(settings[key] / numericSettings[key].scale)])) as Record<NumericSetting, string>;
+}
+
 function SettingsView({
   settings,
   onSave,
@@ -282,28 +298,72 @@ function SettingsView({
   onBack: () => void;
 }): ReactElement {
   const [draft, setDraft] = useState(settings);
+  const [numbers, setNumbers] = useState(() => settingsNumbers(settings));
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const savedTimeout = useRef<number | undefined>(undefined);
 
-  useEffect(() => setDraft(settings), [settings]);
+  useEffect(() => {
+    setDraft(settings);
+    setNumbers(settingsNumbers(settings));
+  }, [settings]);
+  useEffect(() => () => window.clearTimeout(savedTimeout.current), []);
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
+    setSaved(false);
   };
+  const setNumber = (key: NumericSetting, value: string) => {
+    setNumbers((current) => ({ ...current, [key]: value }));
+    setSaved(false);
+  };
+  const errors = Object.fromEntries(numericSettingKeys.map((key) => {
+    const { min, max } = numericSettings[key];
+    const value = Number(numbers[key]);
+    return [key, numbers[key].trim() === "" || !Number.isInteger(value) || value < min || value > max
+      ? `请输入 ${min}–${max} 之间的整数` : null];
+  })) as Record<NumericSetting, string | null>;
 
   const save = async () => {
-    await onSave({
-      focusDurationSeconds: draft.focusDurationSeconds,
-      shortBreakDurationSeconds: draft.shortBreakDurationSeconds,
-      longBreakDurationSeconds: draft.longBreakDurationSeconds,
-      focusRoundsPerCycle: draft.focusRoundsPerCycle,
-      inputIdleThresholdSeconds: draft.inputIdleThresholdSeconds,
-      defaultBreakMode: draft.defaultBreakMode,
-      theme: draft.theme,
-      alwaysOnTop: draft.alwaysOnTop,
-      notificationsEnabled: draft.notificationsEnabled,
-    });
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1800);
+    if (saving || numericSettingKeys.some((key) => errors[key])) return;
+    setSaving(true);
+    setSaved(false);
+    setSaveError(null);
+    try {
+      await onSave({
+        focusDurationSeconds: Number(numbers.focusDurationSeconds) * 60,
+        shortBreakDurationSeconds: Number(numbers.shortBreakDurationSeconds) * 60,
+        longBreakDurationSeconds: Number(numbers.longBreakDurationSeconds) * 60,
+        focusRoundsPerCycle: draft.focusRoundsPerCycle,
+        inputIdleThresholdSeconds: Number(numbers.inputIdleThresholdSeconds),
+        defaultBreakMode: draft.defaultBreakMode,
+        theme: draft.theme,
+        alwaysOnTop: draft.alwaysOnTop,
+        notificationsEnabled: draft.notificationsEnabled,
+      });
+      setSaved(true);
+      window.clearTimeout(savedTimeout.current);
+      savedTimeout.current = window.setTimeout(() => setSaved(false), 1800);
+    } catch (reason) {
+      setSaveError(reason instanceof Error ? reason.message : "设置保存失败，请重试");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const numberInput = (key: NumericSetting) => {
+    const { label, min, max, hint } = numericSettings[key];
+    return (
+      <label key={key} className={key === "inputIdleThresholdSeconds" ? "wideSetting" : undefined}>
+        {label}
+        <input type="number" aria-label={label} min={min} max={max} step="1" value={numbers[key]}
+          aria-invalid={Boolean(errors[key])} aria-describedby={`${key}-hint${errors[key] ? ` ${key}-error` : ""}`}
+          disabled={saving} onChange={(event) => setNumber(key, event.target.value)} />
+        <small id={`${key}-hint`}>{hint}</small>
+        {errors[key] && <span id={`${key}-error`} className="fieldError">{errors[key]}</span>}
+      </label>
+    );
   };
 
   return (
@@ -318,123 +378,86 @@ function SettingsView({
       </header>
 
       <div className="settingsScroll">
-        <section className="settingsSection">
-          <h2>节奏</h2>
-          <div className="settingGrid">
-            <label>
-              专注时长
-              <input
-                type="number"
-                min="5"
-                max="120"
-                value={draft.focusDurationSeconds / 60}
-                onChange={(event) => set("focusDurationSeconds", Number(event.target.value) * 60)}
-              />
-              <small>分钟 · 下一轮生效</small>
-            </label>
-            <label>
-              短休时长
-              <input
-                type="number"
-                min="1"
-                max="60"
-                value={draft.shortBreakDurationSeconds / 60}
-                onChange={(event) => set("shortBreakDurationSeconds", Number(event.target.value) * 60)}
-              />
-              <small>分钟 · 下一轮生效</small>
-            </label>
-            <label>
-              长休时长
-              <input
-                type="number"
-                min="1"
-                max="90"
-                value={draft.longBreakDurationSeconds / 60}
-                onChange={(event) => set("longBreakDurationSeconds", Number(event.target.value) * 60)}
-              />
-              <small>分钟 · 下一轮生效</small>
-            </label>
-            <label>
-              每周期专注轮数
-              <select
-                value={draft.focusRoundsPerCycle}
-                onChange={(event) => set("focusRoundsPerCycle", Number(event.target.value))}
+        <fieldset className="settingsFields" disabled={saving}>
+          <section className="settingsSection">
+            <h2>节奏</h2>
+            <div className="settingGrid">
+              {numericSettingKeys.filter((key) => key !== "inputIdleThresholdSeconds").map(numberInput)}
+              <label>
+                每周期专注轮数
+                <select
+                  value={draft.focusRoundsPerCycle}
+                  onChange={(event) => set("focusRoundsPerCycle", Number(event.target.value))}
+                >
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((number) => (
+                    <option key={number} value={number}>
+                      {number} 轮
+                    </option>
+                  ))}
+                </select>
+                <small>下一周期生效</small>
+              </label>
+            </div>
+          </section>
+
+          <section className="settingsSection">
+            <h2>自动化</h2>
+            {numberInput("inputIdleThresholdSeconds")}
+            <div className="segmented">
+              <span>默认休息模式</span>
+              <button
+                type="button"
+                className={draft.defaultBreakMode === "active" ? "selected" : ""}
+                aria-pressed={draft.defaultBreakMode === "active"}
+                onClick={() => set("defaultBreakMode", "active")}
               >
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((number) => (
-                  <option key={number} value={number}>
-                    {number} 轮
-                  </option>
-                ))}
-              </select>
-              <small>下一周期生效</small>
+                活动休息
+              </button>
+              <button
+                type="button"
+                className={draft.defaultBreakMode === "desk" ? "selected" : ""}
+                aria-pressed={draft.defaultBreakMode === "desk"}
+                onClick={() => set("defaultBreakMode", "desk")}
+              >
+                桌前休息
+              </button>
+            </div>
+            <p className="infoNote">
+              <CircleHelp size={14} />
+              系统输入只传递距最近输入的秒数，不会记录按键、鼠标位置或活动窗口。
+            </p>
+          </section>
+
+          <section className="settingsSection">
+            <h2>外观与系统</h2>
+            <div className="themeChoices">
+              <button type="button" aria-pressed={draft.theme === "light"} className={draft.theme === "light" ? "selected" : ""} onClick={() => set("theme", "light")}>
+                <Sun size={16} />浅色
+              </button>
+              <button type="button" aria-pressed={draft.theme === "dark"} className={draft.theme === "dark" ? "selected" : ""} onClick={() => set("theme", "dark")}>
+                <Moon size={16} />深色
+              </button>
+              <button type="button" aria-pressed={draft.theme === "system"} className={draft.theme === "system" ? "selected" : ""} onClick={() => set("theme", "system")}>
+                <CircleHelp size={16} />跟随系统
+              </button>
+            </div>
+            <label className="toggleRow">
+              <span>常驻顶部</span>
+              <input type="checkbox" checked={draft.alwaysOnTop} onChange={(event) => set("alwaysOnTop", event.target.checked)} />
             </label>
-          </div>
-        </section>
-
-        <section className="settingsSection">
-          <h2>自动化</h2>
-          <label className="wideSetting">
-            输入闲置阈值
-            <input
-              type="number"
-              min="10"
-              max="600"
-              value={draft.inputIdleThresholdSeconds}
-              onChange={(event) => set("inputIdleThresholdSeconds", Number(event.target.value))}
-            />
-            <small>秒 · 下次输入样本生效</small>
-          </label>
-          <div className="segmented">
-            <span>默认休息模式</span>
-            <button
-              type="button"
-              className={draft.defaultBreakMode === "active" ? "selected" : ""}
-              onClick={() => set("defaultBreakMode", "active")}
-            >
-              活动休息
-            </button>
-            <button
-              type="button"
-              className={draft.defaultBreakMode === "desk" ? "selected" : ""}
-              onClick={() => set("defaultBreakMode", "desk")}
-            >
-              桌前休息
-            </button>
-          </div>
-          <p className="infoNote">
-            <CircleHelp size={14} />
-            系统输入只传递距最近输入的秒数，不会记录按键、鼠标位置或活动窗口。
-          </p>
-        </section>
-
-        <section className="settingsSection">
-          <h2>外观与系统</h2>
-          <div className="themeChoices">
-            <button type="button" className={draft.theme === "light" ? "selected" : ""} onClick={() => set("theme", "light")}>
-              <Sun size={16} />浅色
-            </button>
-            <button type="button" className={draft.theme === "dark" ? "selected" : ""} onClick={() => set("theme", "dark")}>
-              <Moon size={16} />深色
-            </button>
-            <button type="button" className={draft.theme === "system" ? "selected" : ""} onClick={() => set("theme", "system")}>
-              <CircleHelp size={16} />跟随系统
-            </button>
-          </div>
-          <label className="toggleRow">
-            <span>常驻顶部</span>
-            <input type="checkbox" checked={draft.alwaysOnTop} onChange={(event) => set("alwaysOnTop", event.target.checked)} />
-          </label>
-          <label className="toggleRow">
-            <span>完成与暂停通知</span>
-            <input type="checkbox" checked={draft.notificationsEnabled} onChange={(event) => set("notificationsEnabled", event.target.checked)} />
-          </label>
-        </section>
+            <label className="toggleRow">
+              <span>完成与暂停通知</span>
+              <input type="checkbox" checked={draft.notificationsEnabled} onChange={(event) => set("notificationsEnabled", event.target.checked)} />
+            </label>
+          </section>
+        </fieldset>
       </div>
 
+      {saveError && <p className="inlineError" role="alert">{saveError} · 请修改后重试，或再次保存。</p>}
       <footer className="settingsFooter">
-        <span className="saveHint">{saved ? "已保存" : "修改将在保存后生效"}</span>
-        <button type="button" className="saveButton" onClick={() => void save()}>
-          保存设置
+        <span className="saveHint" aria-live="polite">{saved ? "已保存" : "修改将在保存后生效"}</span>
+        <button type="button" className="saveButton" disabled={saving} onClick={() => void save()}>
+          {saving ? "保存中…" : "保存设置"}
         </button>
       </footer>
     </main>
@@ -453,13 +476,26 @@ function heatClass(minutes: number, maximum: number): string {
 function StatsView({
   statistics,
   settings,
+  error,
+  onRetry,
   onBack,
 }: {
   statistics: StatisticsSnapshot | null;
   settings: Settings;
+  error: string | null;
+  onRetry: () => void;
   onBack: () => void;
 }): ReactElement {
-  if (!statistics) {
+  const heatmapFrame = useRef<HTMLDivElement>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const lastDate = statistics?.heatmap.at(-1)?.localDate;
+  const hasRecords = statistics?.heatmap.some((day) => day.completedFocusMinutes > 0) ?? false;
+  useEffect(() => {
+    const frame = heatmapFrame.current;
+    if (frame) frame.scrollLeft = Math.max(0, frame.scrollWidth - frame.clientWidth);
+  }, [lastDate, error, hasRecords]);
+
+  if (!statistics || error) {
     return (
       <main className="pageSurface">
         <header className="pageHeader">
@@ -470,8 +506,10 @@ function StatsView({
           <span className="headerSpacer" />
         </header>
         <div className="loadingSurface">
-          <span className="loadingLine" />
-          <p>正在加载统计</p>
+          {error ? <>
+            <p role="alert">{error}</p>
+            <button className="saveButton" type="button" onClick={onRetry}>重试加载统计</button>
+          </> : <><span className="loadingLine" /><p>正在加载统计</p></>}
         </div>
       </main>
     );
@@ -488,8 +526,18 @@ function StatsView({
     ...statistics.heatmap,
   ];
   while (heatmapCells.length % 7 !== 0) heatmapCells.push(null);
-  const hasRecords = statistics.heatmap.some((day) => day.completedFocusMinutes > 0);
+  const heatmapWeeks = Array.from({ length: heatmapCells.length / 7 }, (_, index) =>
+    heatmapCells.slice(index * 7, index * 7 + 7).find((day) => day !== null)?.localDate ?? "");
   const ringStyle = { "--progress": `${todayPercent}%` } as CSSProperties;
+  const selectedDay = statistics.heatmap.find((day) => day.localDate === selectedDate);
+  const navigateHeatmap = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const offsets: Record<string, number> = { ArrowRight: 7, ArrowLeft: -7, ArrowDown: 1, ArrowUp: -1 };
+    if (!(event.key in offsets) && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const next = event.key === "Home" ? 0 : event.key === "End" ? statistics.heatmap.length - 1
+      : Math.max(0, Math.min(statistics.heatmap.length - 1, index + offsets[event.key]!));
+    heatmapFrame.current?.querySelectorAll<HTMLButtonElement>("[data-heatmap-day]")[next]?.focus();
+  };
 
   return (
     <main className="pageSurface">
@@ -553,23 +601,38 @@ function StatsView({
             </span>
           </div>
           {hasRecords ? (
-            <div className="heatmapFrame" aria-label="最近 52 周专注热力图">
+            <div className="heatmapFrame" ref={heatmapFrame} role="region" aria-label="最近 52 周专注热力图">
               <div className="heatmapWeekdays" aria-hidden="true">
                 {['一', '', '三', '', '五', '', '日'].map((day, index) => <span key={index}>{day}</span>)}
               </div>
-              <div className="heatmap">
-                {heatmapCells.map((day, index) => (
-                  <span
-                    key={day?.localDate ?? `empty-${index}`}
-                    className={day ? heatClass(day.completedFocusMinutes, maximum) : "heat-empty"}
-                    title={day ? `${day.localDate} · ${day.completedFocusMinutes} 分钟` : undefined}
-                  />
-                ))}
+              <div className="heatmapCalendar">
+                <div className="heatmapMonths" aria-hidden="true">
+                  {heatmapWeeks.map((date, index) => <span key={index}>
+                    {date && (index === 0 || date.slice(0, 7) !== heatmapWeeks[index - 1]?.slice(0, 7)) ? `${Number(date.slice(5, 7))}月` : ""}
+                  </span>)}
+                </div>
+                <div className="heatmap">
+                  {heatmapCells.map((day, index) => day ? (
+                    <button type="button" key={day.localDate} data-heatmap-day
+                      className={heatClass(day.completedFocusMinutes, maximum)}
+                      aria-label={`${day.localDate}，专注 ${day.completedFocusMinutes} 分钟`}
+                      tabIndex={day.localDate === (selectedDay?.localDate ?? lastDate) ? 0 : -1}
+                      title={`${day.localDate} · ${day.completedFocusMinutes} 分钟`}
+                      onFocus={() => setSelectedDate(day.localDate)} onClick={() => setSelectedDate(day.localDate)}
+                      onKeyDown={(event) => navigateHeatmap(event, index - leadingCells)} />
+                  ) : <span key={`empty-${index}`} className="heat-empty" aria-hidden="true" />)}
+                </div>
               </div>
             </div>
           ) : (
             <p className="emptyState">完成一个完整专注轮后，这里会显示你的节奏。</p>
           )}
+          {hasRecords && <>
+            <p className="heatmapDetails" aria-live="polite">{selectedDay
+              ? `${selectedDay.localDate} · ${selectedDay.completedFocusMinutes} 分钟`
+              : "用方向键浏览日期，聚焦查看专注分钟。"}</p>
+            <p className="heatmapLegend">颜色越深，完成专注分钟越多；空白表示没有完成记录。</p>
+          </>}
         </section>
       </div>
     </main>
@@ -580,37 +643,45 @@ export function App(): ReactElement {
   const [snapshot, setSnapshot] = useState<TimerSnapshot | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [statistics, setStatistics] = useState<StatisticsSnapshot | null>(null);
+  const [statisticsError, setStatisticsError] = useState<string | null>(null);
   const [view, setView] = useState<View>("timer");
-  const [error, setError] = useState<string | null>(null);
+  const [fatalError, setFatalError] = useState<{ title: string; message: string; storage: boolean } | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [windowMode, setWindowMode] = useState<WindowMode>("regular");
   const [changingWindowMode, setChangingWindowMode] = useState(false);
+  const statisticsRequest = useRef(0);
 
   const syncStats = useCallback(async () => {
-    setStatistics(await window.pomodoro.getStatistics());
+    const request = ++statisticsRequest.current;
+    setStatisticsError(null);
+    try {
+      const next = await window.pomodoro.getStatistics();
+      if (request === statisticsRequest.current) setStatistics(next);
+    } catch (reason) {
+      if (request === statisticsRequest.current) setStatisticsError(reason instanceof Error ? reason.message : "统计读取失败");
+    }
   }, []);
 
   const runCommand = useCallback(async (command: TimerCommand) => {
     try {
       setSnapshot(await window.pomodoro.command(command));
+      setOperationError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "计时操作未完成");
+      setOperationError(reason instanceof Error ? reason.message : "计时操作未完成，请重试");
     }
   }, []);
 
   const saveSettings = useCallback(async (patch: SettingsPatch) => {
-    try {
-      setSettings(await window.pomodoro.updateSettings(patch));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "设置保存失败");
-    }
+    setSettings(await window.pomodoro.updateSettings(patch));
   }, []);
 
   const changeWindowMode = useCallback(async (mode: WindowMode) => {
     setChangingWindowMode(true);
     try {
       setWindowMode(await window.pomodoro.setWindowMode(mode));
+      setOperationError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "窗口模式切换失败");
+      setOperationError(reason instanceof Error ? reason.message : "窗口模式切换失败，请重试");
     } finally {
       setChangingWindowMode(false);
     }
@@ -627,13 +698,21 @@ export function App(): ReactElement {
         }
       })
       .catch((reason) => {
-        if (active) setError(reason instanceof Error ? reason.message : "计时核心不可用");
+        if (active) setFatalError({ title: "计时核心不可用", message: reason instanceof Error ? reason.message : "计时核心不可用", storage: false });
       });
 
     const unsubscribe = window.pomodoro.subscribe((event: CoreEvent) => {
       if (event.type === "timer.snapshot") setSnapshot(event.snapshot);
-      if (event.type === "stats.changed") setStatistics(event.statistics);
+      if (event.type === "stats.changed") {
+        ++statisticsRequest.current;
+        setStatistics(event.statistics);
+        setStatisticsError(null);
+      }
       if (event.type === "window.modeChanged") setWindowMode(event.mode);
+      if (event.type === "core.error") {
+        if (event.recoverable) setOperationError(event.message);
+        else setFatalError({ title: event.code === "STORAGE_UNAVAILABLE" ? "本地存储不可用" : "计时核心不可用", message: event.message, storage: event.code === "STORAGE_UNAVAILABLE" });
+      }
     });
 
     return () => {
@@ -664,18 +743,22 @@ export function App(): ReactElement {
   }, [settings]);
 
   useEffect(() => {
-    if (view === "stats") void syncStats();
+    if (view !== "stats") return;
+    void syncStats();
+    const refresh = () => { void syncStats(); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
   }, [view, syncStats]);
 
-  if (error) {
+  if (fatalError) {
     return (
       <main className="failureSurface" role="alert">
         <TimerReset size={26} />
-        <h1>计时核心不可用</h1>
-        <p>{error}</p>
-        <button className="saveButton" type="button" onClick={() => window.location.reload()}>
+        <h1>{fatalError.title}</h1>
+        <p>{fatalError.message}</p>
+        {fatalError.storage ? <p>计时已安全暂停，请重新打开应用后重试。</p> : <button className="saveButton" type="button" onClick={() => window.location.reload()}>
           重新加载
-        </button>
+        </button>}
       </main>
     );
   }
@@ -689,8 +772,13 @@ export function App(): ReactElement {
     );
   }
 
-  if (view === "settings") return <SettingsView settings={settings} onSave={saveSettings} onBack={() => setView("timer")} />;
-  if (view === "stats") return <StatsView statistics={statistics} settings={settings} onBack={() => setView("timer")} />;
-  return <TimerView snapshot={snapshot} settings={settings} windowMode={windowMode} changingWindowMode={changingWindowMode}
-    onWindowMode={(mode) => void changeWindowMode(mode)} onCommand={(command) => void runCommand(command)} onView={setView} />;
+  return <div className="appShell">
+    {operationError && <div className="operationError" role="alert"><span>{operationError}</span>
+      <button type="button" aria-label="关闭错误提示" onClick={() => setOperationError(null)}>关闭</button></div>}
+    {view === "settings" ? <SettingsView settings={settings} onSave={saveSettings} onBack={() => setView("timer")} />
+      : view === "stats" ? <StatsView statistics={statistics} settings={settings} error={statisticsError}
+        onRetry={() => void syncStats()} onBack={() => setView("timer")} />
+        : <TimerView snapshot={snapshot} settings={settings} windowMode={windowMode} changingWindowMode={changingWindowMode}
+          onWindowMode={(mode) => void changeWindowMode(mode)} onCommand={(command) => void runCommand(command)} onView={setView} />}
+  </div>;
 }

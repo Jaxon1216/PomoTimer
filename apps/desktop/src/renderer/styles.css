@@ -19,14 +19,16 @@
   --surface: #f4f1eb;
   --surface-raised: #fffdfa;
   --foreground: #242321;
-  --muted: #817d76;
-  --faint: #aaa69e;
+  --muted: #69645d;
+  --faint: #716b63;
   --track: #e2ded6;
   --line: #ded9d0;
   --focus: #e4584f;
   --short: #229d74;
   --long: #3398a8;
-  --accent: #e4584f;
+  --accent: #b83f37;
+  --button-background: #b83f37;
+  --error: #a32620;
   --shadow: 0 12px 34px #29251d0d;
   --window-titlebar-leading: 18px;
 }
@@ -40,7 +42,9 @@
   --surface-raised: #2e3545;
   --foreground: #f6f2eb;
   --muted: #bbc2ce;
-  --faint: #838b9b;
+  --faint: #9aa2b3;
+  --accent: #f08b82;
+  --error: #f59d95;
   --track: #3c4558;
   --line: #414a5b;
   --shadow: 0 12px 34px #0003;
@@ -93,6 +97,78 @@ select:focus-visible {
   overflow: hidden;
   color: var(--foreground);
   background: var(--surface);
+}
+
+.appShell {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.appShell > .timerSurface,
+.appShell > .pageSurface {
+  height: auto;
+  flex: 1;
+}
+
+.operationError,
+.inlineError {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 7%, var(--surface-raised));
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.operationError {
+  position: absolute;
+  z-index: 3;
+  top: 48px;
+  right: 8px;
+  left: 8px;
+  display: flex;
+  max-height: 84px;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 8px;
+  overflow: auto;
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+}
+
+.operationError span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.operationError button {
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: underline;
+}
+
+.inlineError {
+  max-height: 72px;
+  flex: 0 0 auto;
+  margin: 0 12px;
+  overflow: auto;
+  border-radius: 6px;
+}
+
+.settingsFields {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
 }
 
 .pageSurface {
@@ -578,6 +654,16 @@ select:focus-visible {
   font-size: 9px;
 }
 
+.fieldError {
+  color: var(--error);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--error);
+}
+
 .wideSetting {
   width: 50%;
 }
@@ -664,7 +750,7 @@ select:focus-visible {
 .saveButton {
   padding: 8px 14px;
   color: #fff;
-  background: var(--accent);
+  background: var(--button-background);
   border: 0;
   border-radius: 6px;
   box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 25%, transparent);
@@ -676,6 +762,10 @@ select:focus-visible {
 
 .saveButton:hover {
   filter: brightness(1.06);
+}
+
+.saveButton:disabled {
+  cursor: wait;
 }
 
 .statsHero {
@@ -821,6 +911,22 @@ select:focus-visible {
   font-size: 8px;
   line-height: 12px;
   text-align: center;
+  padding-top: 18px;
+}
+
+.heatmapCalendar {
+  min-width: max-content;
+}
+
+.heatmapMonths {
+  display: grid;
+  height: 18px;
+  grid-auto-flow: column;
+  grid-auto-columns: 12px;
+  gap: 4px;
+  color: var(--faint);
+  font-size: 9px;
+  white-space: nowrap;
 }
 
 .heatmap {
@@ -832,11 +938,30 @@ select:focus-visible {
   gap: 4px;
 }
 
-.heatmap span {
+.heatmap span,
+.heatmap button {
   width: 12px;
   height: 12px;
+  padding: 0;
   background: var(--track);
+  border: 0;
   border-radius: 2px;
+}
+
+.heatmap button {
+  cursor: pointer;
+}
+
+.heatmap button:focus-visible {
+  outline-offset: 1px;
+}
+
+.heatmapDetails,
+.heatmapLegend {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .heatmap .heat-empty {

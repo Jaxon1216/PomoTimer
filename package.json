@@ -11,7 +11,11 @@
     "lint": "npm run lint --workspace=@pomodoro/desktop",
     "typecheck": "npm run typecheck --workspace=@pomodoro/desktop",
     "test": "npm run test --workspace=@pomodoro/desktop",
+    "test:store": "npm run rebuild:native --workspace=@pomodoro/desktop && node scripts/test-store-native.mjs",
     "test:e2e": "npm run test:e2e --workspace=@pomodoro/desktop",
     "package": "npm run package --workspace=@pomodoro/desktop"
+  },
+  "devDependencies": {
+    "esbuild": "0.21.5"
   }
 }
