@@ -312,6 +312,9 @@ test("switches mini mode explicitly, enforces content minima, and restores the r
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
   await expect(window.locator("time")).toHaveText("30:00");
+  // Let the real monitor publish its first controlled sample before comparing
+  // snapshots; unknown -> present is independent of window layout changes.
+  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).automation.inputPresence).toBe("present");
   await resizeContent(app, window, 480, 420);
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(100, 100); });
   await expect.poll(() => window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 320, height: 300 });
