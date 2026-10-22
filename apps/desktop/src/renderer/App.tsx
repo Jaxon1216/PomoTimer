@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from "react";
 import {
   BarChart3,
   ChevronLeft,
   CircleHelp,
+  Maximize2,
+  Minimize2,
   Moon,
+  MoreHorizontal,
   Pause,
   Play,
   RotateCcw,
@@ -19,6 +22,7 @@ import type {
   StatisticsSnapshot,
   TimerCommand,
   TimerSnapshot,
+  WindowMode,
 } from "../shared/contracts";
 import { formatDuration } from "./time";
 
@@ -30,29 +34,21 @@ const labels = {
   "long-break": "长休",
 } as const;
 
-function statusText(snapshot: TimerSnapshot, compact = false): string {
+function statusText(snapshot: TimerSnapshot): string {
   if (snapshot.status === "idle") return "准备开始";
   if (snapshot.status === "running") return snapshot.round.kind === "focus" ? "专注中" : "休息中";
-  if (snapshot.status === "manual-paused") return "手动暂停";
-
-  if (compact) {
-    switch (snapshot.automation.pauseReason) {
-      case "input-away": return "离席 · 自动暂停";
-      case "break-condition": return snapshot.status === "auto-paused" ? "等待离席" : "回到工位 · 休息暂停";
-      case "source-unavailable": return "检测不可用 · 手动控制";
-      case "system-suspend": return "系统暂停";
-      case "core-recovery": return "恢复后暂停";
-      default: return "自动暂停";
-    }
-  }
+  if (snapshot.status === "manual-paused") return "手动暂停 · 点击继续";
 
   switch (snapshot.automation.pauseReason) {
     case "input-away":
-      return "离席，已自动暂停";
-    case "break-condition":
-      return snapshot.status === "auto-paused" ? "等待离席后开始休息" : "回到工位，休息已暂停";
+      return "离席 · 自动暂停";
+    case "break-condition": {
+      const condition = snapshot.round.breakMode === "desk" ? "等待无输入" : "等待离席";
+      const action = snapshot.remainingMs === snapshot.round.totalDurationMs ? "开始" : "继续";
+      return `${condition} · 将自动${action}`;
+    }
     case "source-unavailable":
-      return "输入检测不可用，需手动控制";
+      return "输入检测不可用";
     case "system-suspend":
       return "系统恢复后已暂停";
     case "core-recovery":
@@ -95,51 +91,131 @@ function primaryCommand(snapshot: TimerSnapshot): {
   icon: ReactElement;
 } {
   if (snapshot.status === "running") {
-    return { command: "pause", label: "暂停计时", icon: <Pause size={21} /> };
+    return { command: "pause", label: "暂停计时", icon: <Pause size={16} /> };
+  }
+  const waitingBreak = snapshot.round.kind !== "focus"
+    && (snapshot.status === "idle" || (snapshot.status === "auto-paused" && snapshot.automation.pauseReason === "break-condition"));
+  if (waitingBreak) {
+    return { command: snapshot.status === "idle" ? "start" : "resume", label: "手动开始休息", icon: <Play size={16} /> };
   }
   if (snapshot.status === "idle") {
-    return { command: "start", label: "开始计时", icon: <Play size={21} /> };
+    return { command: "start", label: "开始计时", icon: <Play size={16} /> };
   }
-  return { command: "resume", label: "继续计时", icon: <Play size={21} /> };
+  return { command: "resume", label: "继续计时", icon: <Play size={16} /> };
 }
 
 function TimerView({
   snapshot,
   settings,
-  compact,
+  windowMode,
+  changingWindowMode,
+  onWindowMode,
   onCommand,
   onView,
 }: {
   snapshot: TimerSnapshot;
   settings: Settings;
-  compact: boolean;
+  windowMode: WindowMode;
+  changingWindowMode: boolean;
+  onWindowMode: (mode: WindowMode) => void;
   onCommand: (command: TimerCommand) => void;
   onView: (view: View) => void;
 }): ReactElement {
   const action = primaryCommand(snapshot);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuContainer = useRef<HTMLDivElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const mini = windowMode === "mini";
+  const modeLabel = mini ? "恢复常规窗口" : "切换迷你模式";
   const progress = 1 - snapshot.remainingMs / snapshot.round.totalDurationMs;
+  const remaining = formatDuration(snapshot.remainingMs);
   const circumference = 2 * Math.PI * 108;
   const monitorStatus = snapshot.automation.inputMonitoringAvailable
     ? `系统输入检测 · ${settings.inputIdleThresholdSeconds} 秒阈值`
-    : "输入检测不可用 · 手动控制模式";
+    : snapshot.status === "auto-paused" && snapshot.automation.pauseReason === "source-unavailable"
+      ? "已暂停 · 可手动继续"
+      : "输入检测不可用 · 手动控制";
+  const rounds = snapshot.activeCycleRounds ?? settings.focusRoundsPerCycle;
+  const completedFocus = snapshot.round.focusRoundNumber ?? Math.ceil(snapshot.round.positionInCycle / 2);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    menuContainer.current?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus();
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menuContainer.current?.contains(event.target)) setMenuOpen(false);
+    };
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        menuButton.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [menuOpen]);
+
+  const menuAction = (callback: () => void) => {
+    setMenuOpen(false);
+    callback();
+  };
+  const navigateMenu = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)"));
+    const current = items.findIndex((item) => item === document.activeElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+      : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
+  };
 
   return (
-    <main className={`timerSurface round-${snapshot.round.kind}${compact ? " compact" : ""}`}>
+    <main className={`timerSurface round-${snapshot.round.kind}${mini ? " mini" : ""}`} data-window-mode={windowMode}>
       <header className="titlebar">
         <span className="brand">
           POMO<span>DOT</span>
         </span>
         <div className="titleActions">
-          <IconButton label="打开统计" onClick={() => onView("stats")}>
-            <BarChart3 size={16} />
-          </IconButton>
-          <IconButton label="打开设置" onClick={() => onView("settings")}>
-            <SettingsIcon size={16} />
-          </IconButton>
+          {!mini && (
+            <>
+              <IconButton label={modeLabel} onClick={() => onWindowMode("mini")} className="windowModeButton" disabled={changingWindowMode}>
+                <Minimize2 size={16} />
+              </IconButton>
+              <IconButton label="打开统计" onClick={() => onView("stats")} className="statisticsButton">
+                <BarChart3 size={16} />
+              </IconButton>
+            </>
+          )}
+          <div className="timerMenuContainer" ref={menuContainer}>
+            <button type="button" className="iconButton" aria-label="更多操作" title="更多操作" aria-haspopup="menu"
+              aria-expanded={menuOpen} aria-controls="timer-menu" ref={menuButton} onClick={() => setMenuOpen((open) => !open)}
+              onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); setMenuOpen(true); } }}>
+              <MoreHorizontal size={16} />
+            </button>
+            {menuOpen && (
+              <div className="timerMenu" id="timer-menu" role="menu" aria-label="计时器操作" onKeyDown={navigateMenu}>
+                <button type="button" role="menuitem" onClick={() => menuAction(() => onView("stats"))}><BarChart3 size={15} />打开统计</button>
+                <button type="button" role="menuitem" onClick={() => menuAction(() => onView("settings"))}><SettingsIcon size={15} />打开设置</button>
+                <button type="button" role="menuitem" onClick={() => menuAction(() => onCommand("reset"))}><RotateCcw size={15} />重新开始当前轮次</button>
+                <button type="button" role="menuitem" disabled={changingWindowMode} onClick={() => menuAction(() => onWindowMode(mini ? "regular" : "mini"))}>
+                  {mini ? <Maximize2 size={15} /> : <Minimize2 size={15} />}{modeLabel}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
       <section className="timerStage" aria-labelledby="round-title">
+        <div className="roundMeta">
+          <h1 id="round-title">{labels[snapshot.round.kind]}</h1>
+          <span className="breakMode">
+            {snapshot.round.kind === "focus" ? "系统输入检测" : snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}
+          </span>
+        </div>
         <div className="dialSlot">
           <div
             className="timerDial"
@@ -155,52 +231,42 @@ function TimerView({
                 style={{
                   strokeDasharray: circumference,
                   strokeDashoffset: circumference * (1 - Math.max(0, Math.min(1, progress))),
+                  opacity: progress > 0 ? 1 : 0,
                 }}
               />
             </svg>
             <div className="dialContent">
-              <time>{formatDuration(snapshot.remainingMs)}</time>
+              <time className={remaining.length > 5 ? "longDuration" : undefined}>{remaining}</time>
+              <span className="dialTotal">共 {formatDuration(snapshot.round.totalDurationMs)}</span>
             </div>
           </div>
         </div>
 
-        <div className="roundMeta">
-          <span className="eyebrow">{snapshot.round.cycleNumber.toString().padStart(2, "0")} / 周期</span>
-          <h1 id="round-title">{labels[snapshot.round.kind]}</h1>
-          {snapshot.round.kind !== "focus" && (
-            <span className="breakMode">
-              {snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}
-            </span>
-          )}
+        <div className="timerStatus" aria-live="polite">
+          <div className={`statePill state-${snapshot.status}`} title={statusText(snapshot)}>
+            <span className="stateDot" aria-hidden="true" />
+            <span>{statusText(snapshot)}</span>
+          </div>
+          <p className="monitorStatus">{monitorStatus}</p>
         </div>
-
-        <div className={`statePill state-${snapshot.status}`} title={statusText(snapshot)}>
-          <span className="stateDot" />
-          {statusText(snapshot, compact)}
-        </div>
-        <p className="monitorStatus">{monitorStatus}</p>
 
         <div className="timerControls" aria-label="计时控制">
-          <IconButton label="重新开始当前轮次" onClick={() => onCommand("reset")}>
-            <RotateCcw size={17} />
-          </IconButton>
           <IconButton label={action.label} onClick={() => onCommand(action.command)} className="primary">
             {action.icon}
           </IconButton>
           <IconButton label="跳到下一轮" onClick={() => onCommand("next")}>
-            <SkipForward size={17} />
+            <SkipForward size={16} />
           </IconButton>
         </div>
       </section>
 
       <footer className="timerFooter">
-        <span className="roundCount">
-          {snapshot.round.focusRoundNumber ?? "休"} <small>/ {snapshot.activeCycleRounds ?? settings.focusRoundsPerCycle}</small>
-        </span>
-        <span className="footerHint">{snapshot.round.kind === "focus" ? "专注轮次" : "休息轮次"}</span>
-        <button type="button" className="textControl" onClick={() => onCommand("reset")}>
-          重置
-        </button>
+        <div className="roundSequence" role="img" aria-label={`第 ${snapshot.round.positionInCycle} / ${rounds * 2} 阶段`}>
+          {Array.from({ length: rounds * 2 }, (_, index) => (
+            <span key={index} className={index === snapshot.round.positionInCycle - 1 ? "current" : index < snapshot.round.positionInCycle - 1 ? "finished" : ""} />
+          ))}
+        </div>
+        <span className="roundCount">本周期 {completedFocus} / {rounds}</span>
       </footer>
     </main>
   );
@@ -516,7 +582,8 @@ export function App(): ReactElement {
   const [statistics, setStatistics] = useState<StatisticsSnapshot | null>(null);
   const [view, setView] = useState<View>("timer");
   const [error, setError] = useState<string | null>(null);
-  const [compact, setCompact] = useState(false);
+  const [windowMode, setWindowMode] = useState<WindowMode>("regular");
+  const [changingWindowMode, setChangingWindowMode] = useState(false);
 
   const syncStats = useCallback(async () => {
     setStatistics(await window.pomodoro.getStatistics());
@@ -538,13 +605,25 @@ export function App(): ReactElement {
     }
   }, []);
 
+  const changeWindowMode = useCallback(async (mode: WindowMode) => {
+    setChangingWindowMode(true);
+    try {
+      setWindowMode(await window.pomodoro.setWindowMode(mode));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "窗口模式切换失败");
+    } finally {
+      setChangingWindowMode(false);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
-    void Promise.all([window.pomodoro.getSnapshot(), window.pomodoro.getSettings()])
-      .then(([nextSnapshot, nextSettings]) => {
+    void Promise.all([window.pomodoro.getSnapshot(), window.pomodoro.getSettings(), window.pomodoro.getWindowMode()])
+      .then(([nextSnapshot, nextSettings, nextWindowMode]) => {
         if (active) {
           setSnapshot(nextSnapshot);
           setSettings(nextSettings);
+          setWindowMode(nextWindowMode);
         }
       })
       .catch((reason) => {
@@ -554,6 +633,7 @@ export function App(): ReactElement {
     const unsubscribe = window.pomodoro.subscribe((event: CoreEvent) => {
       if (event.type === "timer.snapshot") setSnapshot(event.snapshot);
       if (event.type === "stats.changed") setStatistics(event.statistics);
+      if (event.type === "window.modeChanged") setWindowMode(event.mode);
     });
 
     return () => {
@@ -563,11 +643,8 @@ export function App(): ReactElement {
   }, []);
 
   useEffect(() => {
-    const resize = () => setCompact(window.innerWidth <= 300 || window.innerHeight <= 390);
-    resize();
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, []);
+    document.documentElement.dataset.windowMode = windowMode;
+  }, [windowMode]);
 
   useEffect(() => {
     if (!settings) return;
@@ -614,5 +691,6 @@ export function App(): ReactElement {
 
   if (view === "settings") return <SettingsView settings={settings} onSave={saveSettings} onBack={() => setView("timer")} />;
   if (view === "stats") return <StatsView statistics={statistics} settings={settings} onBack={() => setView("timer")} />;
-  return <TimerView snapshot={snapshot} settings={settings} compact={compact} onCommand={(command) => void runCommand(command)} onView={setView} />;
+  return <TimerView snapshot={snapshot} settings={settings} windowMode={windowMode} changingWindowMode={changingWindowMode}
+    onWindowMode={(mode) => void changeWindowMode(mode)} onCommand={(command) => void runCommand(command)} onView={setView} />;
 }

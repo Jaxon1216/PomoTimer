@@ -19,9 +19,11 @@ SQLite in app.getPath("userData")
 
 ## 2. 进程边界
 
-React 只渲染快照、导航设置/统计视图、维护临时表单和紧凑布局判断。Preload 只暴露 `getSnapshot`、`command`、`getSettings`、`updateSettings`、`getCapabilities`、`getStatistics`、`subscribe`。Main 验证调用来源和 payload，广播经 Zod 校验的状态事件。
+React 只渲染快照、导航设置/统计视图、维护临时表单，并显示 Main 返回或广播的窗口模式。Preload 只暴露 `getSnapshot`、`command`、`getSettings`、`updateSettings`、`getCapabilities`、`getStatistics`、`getWindowMode`、`setWindowMode`、`subscribe`。Main 验证调用来源和 payload，广播经 Zod 校验的状态事件。
 
 `TimerEngine` 保存轮次、剩余时间、运行状态、手动暂停锁、输入 presence、设置生效边界，并在完整专注结束时调用 Store 写入一条记录。它使用单调时间派生剩余时长；Store 只保存状态快照、设置和完成记录。
+
+`regular | mini` 是 Main 管理的原生窗口状态，不属于 TimerEngine 或持久化设置。Main 在内存中分别记住每种模式的窗口 bounds，应用各自的最小内容尺寸，切换后返回当前模式并广播 `window.modeChanged`。Renderer 启动时并行读取模式与计时/设置数据；模式读取失败使用现有核心错误界面，不能猜测模式。原生尺寸变化只由 CSS 调整排布，React 不监听 resize 来切换迷你模式，也不为布局变化发送计时命令。
 
 ## 3. 平台集成
 
@@ -31,6 +33,7 @@ React 只渲染快照、导航设置/统计视图、维护临时表单和紧凑�
 - 关闭窗口在 Windows 上隐藏到托盘，退出菜单设置退出标记后真正退出；macOS 遵循应用生命周期。
 - `contextIsolation`、sandbox、CSP、禁止导航和外部链接 allowlist 必须保持。
 - macOS 窗口使用 `hiddenInset` 时，Main 仅配置原生 traffic-light 位置；Renderer 根据浏览器平台标记预留受控标题栏安全区。Windows 使用默认原生标题栏，不继承 macOS 留白，最小尺寸换算仍以内容区域为准。
+- 首次启动使用常规模式 360×478；常规最小内容区域为 320×300，首次进入迷你模式和迷你最小区域均为 220×240。显式切回常规恢复之前的常规 bounds；模式和 bounds 仅在本次进程内保留，不写入 SQLite。常规模式保持竖向圆环构图、状态与操作同行，CSS 根据可用空间连续调整圆环、字号与留白；迷你模式保持状态与操作上下排列，拖动不改变构图或模式。
 - 托盘资源与应用图标分离：macOS 从 `trayTemplate.png` 和 `trayTemplate@2x.png` 创建透明黑色 template `NativeImage` 并设置 tooltip；Windows 只加载 `.ico`，Dock 继续使用 `.icns`。
 - 原生验收使用独立临时 `userData`，由 Main 的真实 PID、`app.getPath("userData")` 和当前 Tray 的 `getBounds()` 确认实例。只有显式设置 `POMODORO_DIAGNOSTICS=1` 时，Node inspector 才可通过 Main 内部的只读 symbol 查询窗口、Tray 及其实际图像倍率；该能力不进入 preload 或 IPC。其他常驻应用无需退出。
 
@@ -42,4 +45,4 @@ React 只渲染快照、导航设置/统计视图、维护临时表单和紧凑�
 
 ## 5. 测试边界
 
-`TimerEngine` 用注入的单调时钟、墙钟和 Store 独立测试；Electron E2E 验证真实 preload/IPC、窗口缩放、控制、设置和事件同步。macOS/Windows 的 idle、通知、托盘和睡眠恢复仍需真实设备手工验证。
+`TimerEngine` 用注入的单调时钟、墙钟和 Store 独立测试；Renderer 测试验证 Main 模式事件、菜单可达性、休息自动等待文案、故障可见和布局操作不发送计时命令。Electron E2E 验证真实 preload/IPC、显式模式切换与尺寸恢复、常规窄矮布局、控制、设置和事件同步。macOS/Windows 的 idle、通知、托盘和睡眠恢复仍需真实设备手工验证。

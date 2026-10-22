@@ -93,23 +93,27 @@ select:focus-visible {
   overflow: hidden;
   color: var(--foreground);
   background: var(--surface);
+}
+
+.pageSurface {
   animation: in 0.18s ease-out both;
 }
 
 .titlebar {
   display: flex;
-  min-height: 48px;
+  height: 44px;
+  flex: 0 0 44px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px 0 var(--window-titlebar-leading);
+  padding: 0 10px 0 var(--window-titlebar-leading);
   -webkit-app-region: drag;
 }
 
 .brand {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 760;
-  letter-spacing: 0.16em;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
 }
 
 .brand span {
@@ -119,6 +123,7 @@ select:focus-visible {
 .titleActions {
   display: flex;
   gap: 2px;
+  margin-left: auto;
   -webkit-app-region: no-drag;
 }
 
@@ -134,7 +139,7 @@ select:focus-visible {
   border: 0;
   border-radius: 7px;
   cursor: pointer;
-  transition: 0.15s;
+  transition: color 0.15s, background-color 0.15s, border-color 0.15s;
 }
 
 .iconButton:not(:disabled):hover {
@@ -148,32 +153,34 @@ select:focus-visible {
 }
 
 .timerStage {
-  display: flex;
+  display: grid;
+  width: 100%;
+  max-width: 400px;
   min-height: 0;
   flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 0 24px 4px;
+  align-self: center;
+  grid-template-areas: "meta meta" "dial dial" "status controls";
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 28px minmax(0, 1fr) minmax(36px, max-content);
+  column-gap: 12px;
+  row-gap: clamp(6px, 2vh, 12px);
+  padding: clamp(4px, calc(2vh - 2px), 8px) clamp(16px, 5vw, 24px) clamp(8px, 2.5vh, 12px);
 }
 
 .dialSlot {
-  /* 先让元数据和操作占据所需高度，再用剩余空间同时约束圆环与字号。 */
-  display: flex;
-  width: 100%;
-  min-height: 60px;
-  flex: 0 1 220px;
-  justify-content: center;
-  margin-bottom: 10px;
+  grid-area: dial;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  place-items: center;
   container-type: size;
 }
 
 .timerDial {
-  --dial-size: min(100cqw, 100cqh, 220px);
+  --dial-size: min(100cqw, 100cqh, 232px);
   position: relative;
   width: var(--dial-size);
   height: var(--dial-size);
-  flex: 0 0 auto;
 }
 
 .timerDial svg {
@@ -190,14 +197,14 @@ select:focus-visible {
 
 .dialTrack {
   stroke: var(--track);
-  stroke-width: 2;
+  stroke-width: 2.2;
 }
 
 .dialProgress {
   stroke: var(--round-color, var(--focus));
-  stroke-width: 10;
+  stroke-width: 4;
   stroke-linecap: round;
-  transition: stroke 0.18s, stroke-dashoffset 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: stroke 0.18s, stroke-dashoffset 0.45s;
 }
 
 .round-short-break {
@@ -211,107 +218,125 @@ select:focus-visible {
 .dialContent {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(3px, calc(var(--dial-size) * 0.022), 5px);
 }
 
 .dialContent time {
   display: block;
   max-width: 100%;
   font-family: MonaMono, "SF Mono", monospace;
-  font-size: clamp(12px, calc(var(--dial-size) * 0.2), 44px);
+  font-size: calc(var(--dial-size) * 0.285);
   font-weight: 450;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.08em;
-  line-height: 1;
+  letter-spacing: -0.065em;
+  line-height: 1.1;
   white-space: nowrap;
 }
 
+.dialTotal {
+  color: var(--muted);
+  font-size: clamp(10px, calc(var(--dial-size) * 0.055), 12px);
+  line-height: 1.25;
+}
+
+.dialContent time.longDuration {
+  font-size: calc(var(--dial-size) * 0.245);
+}
+
 .roundMeta {
+  grid-area: meta;
   display: flex;
-  min-height: 45px;
-  flex-direction: column;
+  min-width: 0;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 8px;
 }
 
 .roundMeta h1 {
   margin: 0;
-  color: var(--round-color, var(--focus));
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.eyebrow {
-  color: var(--faint);
-  font-size: 9px;
+  font-size: clamp(14px, calc(8px + 2vh), 18px);
   font-weight: 650;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  line-height: 1.25;
+  letter-spacing: 0.02em;
 }
 
 .breakMode {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.breakMode::before {
+  content: "· ";
+}
+
+.timerStatus {
+  grid-area: status;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
 }
 
 .statePill {
   display: flex;
+  max-width: 100%;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
-  color: var(--foreground);
   font-size: 12px;
-  font-weight: 600;
-  line-height: 1.2;
+  font-weight: 550;
+  line-height: 16px;
 }
 
 .stateDot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
   border-radius: 50%;
   background: var(--round-color, var(--focus));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--round-color, var(--focus)) 14%, transparent);
 }
 
 .state-auto-paused .stateDot {
-  background: #d79543;
-  box-shadow: 0 0 0 3px #d7954322;
+  background: #bb843b;
 }
 
 .state-manual-paused .stateDot {
   background: var(--muted);
-  box-shadow: 0 0 0 3px #8883;
 }
 
 .monitorStatus {
-  min-height: 15px;
-  margin: 4px 0 0;
+  max-width: 100%;
+  margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
+  line-height: 14px;
+  text-align: left;
 }
 
 .timerControls {
+  grid-area: controls;
   display: flex;
-  min-height: 50px;
   align-items: center;
-  gap: 17px;
-  margin-top: 9px;
+  justify-content: center;
+  gap: 12px;
 }
 
 .timerControls .iconButton {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
 }
 
 .timerControls .primary {
-  width: 48px;
-  height: 48px;
-  color: var(--foreground);
-  border: 2px solid var(--muted);
-  border-radius: 50%;
+  border: 1px solid var(--line);
 }
 
 .timerControls .primary:not(:disabled):hover {
@@ -321,116 +346,139 @@ select:focus-visible {
 
 .timerFooter {
   display: flex;
-  min-height: 42px;
+  height: 34px;
+  flex: 0 0 34px;
   align-items: center;
   justify-content: center;
-  gap: 11px;
-  padding: 3px 14px 8px;
+  gap: 8px;
+  padding: 0 14px 10px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.roundSequence {
+  display: flex;
+  max-width: 132px;
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
+}
+
+.roundSequence span {
+  height: 3px;
+  min-width: 2px;
+  flex: 1;
+  border-radius: 2px;
+  background: var(--track);
+}
+
+.roundSequence .finished {
+  background: var(--muted);
+}
+
+.roundSequence .current {
+  background: var(--round-color, var(--focus));
 }
 
 .roundCount {
-  font-family: MonaMono, monospace;
-  font-size: 12px;
+  white-space: nowrap;
 }
 
-.roundCount small {
-  color: var(--faint);
-  font-family: MonaSans, sans-serif;
+.timerMenuContainer {
+  position: relative;
+  -webkit-app-region: no-drag;
 }
 
-.footerHint {
-  color: var(--faint);
-  font-size: 10px;
+.timerMenu {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  width: 184px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
 }
 
-.textControl {
+.timerMenu button {
+  display: flex;
+  width: 100%;
+  min-height: 31px;
+  align-items: center;
+  gap: 8px;
   padding: 5px 8px;
-  color: var(--muted);
   background: transparent;
   border: 0;
   border-radius: 5px;
+  text-align: left;
   cursor: pointer;
-  font-size: 11px;
-}
-
-.textControl:hover {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
-}
-
-.compact .titlebar {
-  min-height: 34px;
-  padding: 0 8px 0 var(--window-titlebar-leading);
-}
-
-.compact .brand {
-  font-size: 9px;
-}
-
-.compact .timerStage {
-  justify-content: center;
-  gap: 0;
-  padding: 0 7px 2px;
-}
-
-.compact .dialSlot {
-  flex-basis: 166px;
-  margin-bottom: 2px;
-}
-
-.compact .timerDial {
-  --dial-size: min(100cqw, 100cqh, 166px);
-}
-
-.compact .dialProgress {
-  stroke-width: 7;
-}
-
-.compact .dialContent time {
-  font-size: clamp(12px, calc(var(--dial-size) * 0.2), 34px);
-}
-
-.compact .roundMeta {
-  min-height: 26px;
-}
-
-.compact .roundMeta h1 {
   font-size: 12px;
 }
 
-.compact .eyebrow,
-.compact .breakMode,
-.compact .monitorStatus,
-.compact .timerFooter {
+.timerMenu button:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.timerMenu button:disabled {
+  opacity: 0.4;
+}
+
+.mini .titlebar {
+  height: 34px;
+  flex-basis: 34px;
+  justify-content: flex-end;
+  padding: 0 8px 0 var(--window-titlebar-leading);
+}
+
+.mini .brand,
+.mini .timerFooter,
+.mini .dialTotal {
   display: none;
 }
 
-.compact .statePill {
-  max-width: 100%;
-  min-height: 14px;
-  overflow: hidden;
-  margin-top: 2px;
-  font-size: 10px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.mini .timerStage {
+  grid-template-areas: "meta" "dial" "status" "controls";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 16px minmax(96px, 1fr) 32px 32px;
+  gap: 4px;
+  padding: 4px 12px 8px;
 }
 
-.compact .timerControls {
-  min-height: 36px;
-  gap: 11px;
-  margin-top: 2px;
+.mini .timerDial {
+  --dial-size: min(100cqw, 100cqh, 140px);
 }
 
-.compact .timerControls .iconButton {
-  width: 25px;
-  height: 25px;
+.mini .roundMeta {
+  gap: 5px;
 }
 
-.compact .timerControls .primary {
-  width: 36px;
-  height: 36px;
+.mini .roundMeta h1 {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 550;
+}
+
+.mini .breakMode {
+  font-size: 11px;
+}
+
+.mini .timerStatus {
+  align-items: center;
+  gap: 2px;
+}
+
+.mini .monitorStatus {
+  text-align: center;
+}
+
+.mini .statePill {
+  line-height: 16px;
+}
+
+.mini .monitorStatus {
+  line-height: 14px;
 }
 
 .pageHeader {
@@ -872,12 +920,10 @@ select:focus-visible {
 @keyframes in {
   from {
     opacity: 0;
-    transform: scale(0.987);
   }
 
   to {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -892,12 +938,8 @@ select:focus-visible {
   }
 }
 
-@media (max-width: 300px), (max-height: 390px) {
-  .titlebar {
-    min-height: 34px;
-  }
-
-  :root[data-platform="macos"] .titlebar .brand {
+@media (max-width: 335px) {
+  .titlebar .brand {
     display: none;
   }
 
@@ -919,7 +961,8 @@ select:focus-visible {
 }
 
 @media (max-width: 300px) {
-  .settingsScroll {
+  .settingsScroll,
+  .statsScroll {
     padding: 14px 12px 10px;
   }
 
@@ -952,5 +995,23 @@ select:focus-visible {
   .saveButton {
     flex-shrink: 0;
     padding: 8px 10px;
+  }
+
+  .weekBars {
+    gap: 4px;
+  }
+
+  .weekDay {
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pageSurface {
+    animation: none;
+  }
+
+  .dialProgress {
+    transition: none;
   }
 }

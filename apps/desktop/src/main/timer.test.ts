@@ -137,6 +137,53 @@ describe("TimerEngine", () => {
     expect(store.sessions).toHaveLength(1);
   });
 
+  it("finishes focus into a full automatically paused break without counting waiting time", () => {
+    const { engine, clock } = create();
+    engine.command("start");
+    clock.advance(defaultSettings.focusDurationSeconds * 1000);
+
+    const waiting = structuredClone(engine.snapshot);
+    expect(waiting.round.kind).toBe("short-break");
+    expect(waiting.status).toBe("auto-paused");
+    expect(waiting.automation.pauseReason).toBe("break-condition");
+    expect(waiting.remainingMs).toBe(defaultSettings.shortBreakDurationSeconds * 1000);
+
+    clock.advance(20_000);
+    expect(engine.snapshot.remainingMs).toBe(waiting.remainingMs);
+    expect(engine.inputSample(0, true).status).toBe("auto-paused");
+  });
+
+  it("starts a waiting break only when the configured system-idle threshold is reached", () => {
+    const { engine, clock } = create();
+    engine.applySettings({ inputIdleThresholdSeconds: 75 });
+    engine.command("start");
+    clock.advance(defaultSettings.focusDurationSeconds * 1000);
+    expect(engine.snapshot.status).toBe("auto-paused");
+
+    expect(engine.inputSample(74, true).status).toBe("auto-paused");
+    const started = engine.inputSample(75, true);
+    expect(started.status).toBe("running");
+    expect(started.automation.pauseReason).toBe("none");
+    expect(started.remainingMs).toBe(defaultSettings.shortBreakDurationSeconds * 1000);
+
+    clock.advance(1_000);
+    expect(engine.snapshot.remainingMs).toBe(defaultSettings.shortBreakDurationSeconds * 1000 - 1_000);
+  });
+
+  it("keeps a manually paused break locked when system input meets the automatic condition", () => {
+    const { engine, clock } = create();
+    engine.command("next");
+    expect(engine.inputSample(defaultSettings.inputIdleThresholdSeconds, true).status).toBe("running");
+    const paused = engine.command("pause");
+
+    clock.advance(20_000);
+    const stillPaused = engine.inputSample(defaultSettings.inputIdleThresholdSeconds + 100, true);
+    expect(stillPaused.status).toBe("manual-paused");
+    expect(stillPaused.automation.manualPauseLocked).toBe(true);
+    expect(stillPaused.remainingMs).toBe(paused.remainingMs);
+    expect(engine.command("resume").status).toBe("running");
+  });
+
   it("keeps a changed cycle length for the next cycle across restart", () => {
     const first = create();
     first.engine.command("start");

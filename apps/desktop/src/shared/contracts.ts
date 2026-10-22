@@ -13,6 +13,15 @@ export type BreakMode = z.infer<typeof breakModeSchema>;
 export const pauseReasonSchema = z.enum(["none", "input-away", "break-condition", "system-suspend", "core-recovery", "source-unavailable"]);
 export type PauseReason = z.infer<typeof pauseReasonSchema>;
 
+// WindowMode 是主进程确认的窗口呈现形态。
+// 领域：Electron / IPC 契约
+// 顺序：窗口模式链第 1 站，Renderer -> Preload -> Main 窗口管理。
+// 作用：限定常规计时器和迷你挂件之间的显式切换。
+// 原因：拖动窗口尺寸不能隐式改变界面模式或计时策略。
+// 边界：不属于计时快照、业务设置或持久化数据。
+export const windowModeSchema = z.enum(["regular", "mini"]);
+export type WindowMode = z.infer<typeof windowModeSchema>;
+
 export const roundSchema = z.object({
   kind: roundKindSchema,
   cycleNumber: z.number().int().min(1),
@@ -88,6 +97,7 @@ export type TimerCommand = z.infer<typeof timerCommandSchema>;
 export const coreEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("timer.snapshot"), snapshot: timerSnapshotSchema }).strict(),
   z.object({ type: z.literal("stats.changed"), statistics: statisticsSnapshotSchema }).strict(),
+  z.object({ type: z.literal("window.modeChanged"), mode: windowModeSchema }).strict(),
   z.object({ type: z.literal("core.error"), code: z.string(), message: z.string(), recoverable: z.boolean() }).strict(),
 ]);
 export type CoreEvent = z.infer<typeof coreEventSchema>;
@@ -99,5 +109,7 @@ export interface PomodoroApi {
   updateSettings(patch: SettingsPatch): Promise<Settings>;
   getCapabilities(): Promise<Capabilities>;
   getStatistics(): Promise<StatisticsSnapshot>;
+  getWindowMode(): Promise<WindowMode>;
+  setWindowMode(mode: WindowMode): Promise<WindowMode>;
   subscribe(listener: (event: CoreEvent) => void): () => void;
 }
