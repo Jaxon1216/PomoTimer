@@ -9,7 +9,7 @@ React -> preload -> Main IPC -> TimerEngine -> SqliteStore
 
 启动时 Main 先取得单实例锁，再打开 `app.getPath("userData")/pomodoro.sqlite`、执行事务迁移、恢复快照并把上次运行中的轮次转为 `auto-paused/core-recovery`，随后创建窗口和托盘。重复启动只唤起已有窗口。计时不依赖 renderer 轮询。
 
-Renderer 启动时并行读取快照、设置和 `getWindowMode`，并订阅经 schema 校验的事件。窗口初始为 `regular`；模式读取失败进入现有核心不可用界面。React 不根据 resize 推断窗口模式。
+Renderer 启动时并行读取快照、设置，并订阅经 schema 校验的事件。Main 创建初始内容区域 360×478、最小 160×180 的窗口；Renderer 的 CSS 直接根据可用宽高调整布局，不读取或维护窗口模式。
 
 点击开始、暂停、继续、下一轮或重置时，React 调用 `window.pomodoro.command`。Preload 和 Main 分别做 schema 校验，Main 将命令交给唯一 TimerEngine；成功迁移后保存快照，并通过 `pomodoro:event` 广播到窗口和托盘。Renderer 从事件更新显示，不自行扣减权威剩余时间。
 
@@ -17,7 +17,7 @@ Main 每秒读取 `powerMonitor.getSystemIdleTime()`，只将秒数交给 TimerE
 
 专注完成后 TimerEngine 生成等待条件的休息轮并广播快照；Renderer 显示“等待离席 · 将自动开始”或“等待无输入 · 将自动开始”。输入条件满足后仍由 Main 的采样驱动 TimerEngine 自动开始，Renderer 不启动本地倒计时，也不自动发送 start/resume。只有用户点击可选的“手动开始休息”图标才发送相应 start/resume；手动暂停后的继续与检测失败回退仍遵循同一权威状态机。
 
-点击“更多操作”中的“切换迷你模式”或“恢复常规窗口”时，React 调用 `setWindowMode`，经 Preload/Main 校验后由 Main 保存当前模式 bounds，再应用目标模式的最小尺寸与上次 bounds。Main 返回最终模式并广播 `window.modeChanged`，React 据此切换展示。常规首次 360×478、最小 320×300；迷你首次及最小 220×240。拖动仅调整模式内部排布，展开恢复之前的常规窗口；该链路不经过 TimerEngine 或 Store，模式与 bounds 也不写入 SQLite。
+拖动原生窗口边框时，Main 约束最小内容区域并记住本次运行内单个窗口的位置与尺寸；恢复时将其限制在可用显示区域内。CSS 在窄小窗口收起次要信息，在 160×180 等微小窗口使用数字与细进度线，在宽至少 360 px 且高不超过 240 px 时将圆环放到信息与控制左侧。轮次、完整状态、监测信息和计时按钮保持可达。“更多操作”只提供统计、设置与重置入口；该布局链路没有 IPC 请求或专用事件，不经过 TimerEngine 或 Store，也不写入 SQLite。
 
 设置页面提交后，Main 验证 patch、持久化设置、更新置顶状态并广播快照。统计页面调用 `getStatistics`，由 Store 按本机日期聚合完成专注记录。Renderer 不能访问 SQLite、Node、Electron 或任意未列出的 channel。
 

@@ -11,14 +11,12 @@ getSettings(): Promise<Settings>
 updateSettings(patch: Partial<Omit<Settings, "version">>): Promise<Settings>
 getCapabilities(): Promise<Capabilities>
 getStatistics(): Promise<StatisticsSnapshot>
-getWindowMode(): Promise<WindowMode>
-setWindowMode(mode: WindowMode): Promise<WindowMode>
 subscribe(listener: (event: CoreEvent) => void): () => void
 ```
 
 每个参数和返回值都经过共享 Zod schema。Main 仅接受主窗口 sender；Preload 不暴露通用 IPC。
 
-`WindowMode = "regular" | "mini"`，只接受这两个枚举值。窗口模式由 Main 持有；`setWindowMode` 应用该模式对应的内容最小尺寸和已记忆的 bounds，返回最终模式并广播 `window.modeChanged`。初始常规内容区域为 360×478、最小 320×300；迷你首次进入与最小内容区域为 220×240。切回常规恢复之前的常规 bounds，各模式 bounds 仅存在于 Main 内存中。Renderer 不接触原生窗口坐标，也不通过 resize 自动请求迷你模式；这些操作不调用 TimerEngine、不改变快照且不写数据库。
+窗口布局不扩展 IPC allowlist。Main 创建初始 360×478、最小 160×180 的内容区域，负责原生边框换算以及本次运行内单个窗口位置与尺寸的恢复和显示区域限制。Renderer 不接触原生窗口坐标；CSS 根据可用宽高调整布局，resize 不发送窗口或计时命令、不改变快照且不写数据库。
 
 ## 2. TimerSnapshot
 
@@ -47,11 +45,10 @@ interface TimerSnapshot {
 type CoreEvent =
   | { type: "timer.snapshot"; snapshot: TimerSnapshot }
   | { type: "stats.changed"; statistics: StatisticsSnapshot }
-  | { type: "window.modeChanged"; mode: WindowMode }
   | { type: "core.error"; code: string; message: string; recoverable: boolean };
 ```
 
-Main 每 500ms 广播权威快照；命令、输入采样、轮次变化、电源事件和设置保存走同一广播链。窗口模式事件只携带本应用的模式枚举，不携带 bounds、其他应用窗口、原始输入、屏幕或相机数据。Renderer 在初次并行读取时通过 `getWindowMode` 获得模式，再从模式切换返回值和模式事件更新展示；计时状态仍只来自 TimerSnapshot。
+Main 每 500ms 广播权威快照；命令、输入采样、轮次变化、电源事件和设置保存走同一广播链。Renderer 在初次并行读取时获得快照与设置，后续计时状态仍只来自 TimerSnapshot。布局变化没有专用事件，事件不携带窗口 bounds、其他应用窗口、原始输入、屏幕或相机数据。
 
 `stats.changed` 在完成记录事务提交后或本机日期变化时发布，不为跳过轮次增加统计。`core.error` 中 `STORAGE_UNAVAILABLE/recoverable=false` 表示计时已在内存中冻结、后台写入已停止，需要重新打开应用；`COMMAND_REJECTED/recoverable=true` 等普通操作错误只显示可恢复提示，不移除正常计时视图。
 

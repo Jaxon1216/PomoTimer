@@ -3,8 +3,6 @@ import {
   BarChart3,
   ChevronLeft,
   CircleHelp,
-  Maximize2,
-  Minimize2,
   Moon,
   MoreHorizontal,
   Pause,
@@ -22,7 +20,6 @@ import type {
   StatisticsSnapshot,
   TimerCommand,
   TimerSnapshot,
-  WindowMode,
 } from "../shared/contracts";
 import { formatDuration } from "./time";
 
@@ -111,17 +108,11 @@ function primaryCommand(snapshot: TimerSnapshot): {
 function TimerView({
   snapshot,
   settings,
-  windowMode,
-  changingWindowMode,
-  onWindowMode,
   onCommand,
   onView,
 }: {
   snapshot: TimerSnapshot;
   settings: Settings;
-  windowMode: WindowMode;
-  changingWindowMode: boolean;
-  onWindowMode: (mode: WindowMode) => void;
   onCommand: (command: TimerCommand) => void;
   onView: (view: View) => void;
 }): ReactElement {
@@ -129,9 +120,8 @@ function TimerView({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuContainer = useRef<HTMLDivElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
-  const mini = windowMode === "mini";
-  const modeLabel = mini ? "恢复常规窗口" : "切换迷你模式";
   const progress = 1 - snapshot.remainingMs / snapshot.round.totalDurationMs;
+  const progressPercent = Math.max(0, Math.min(1, progress)) * 100;
   const remaining = formatDuration(snapshot.remainingMs);
   const circumference = 2 * Math.PI * 108;
   const monitorStatus = snapshot.automation.inputMonitoringAvailable
@@ -177,22 +167,15 @@ function TimerView({
   };
 
   return (
-    <main className={`timerSurface round-${snapshot.round.kind}${mini ? " mini" : ""}`} data-window-mode={windowMode}>
+    <main className={`timerSurface round-${snapshot.round.kind}`}>
       <header className="titlebar">
         <span className="brand">
           POMO<span>DOT</span>
         </span>
         <div className="titleActions">
-          {!mini && (
-            <>
-              <IconButton label={modeLabel} onClick={() => onWindowMode("mini")} className="windowModeButton" disabled={changingWindowMode}>
-                <Minimize2 size={16} />
-              </IconButton>
-              <IconButton label="打开统计" onClick={() => onView("stats")} className="statisticsButton">
-                <BarChart3 size={16} />
-              </IconButton>
-            </>
-          )}
+          <IconButton label="打开统计" onClick={() => onView("stats")} className="statisticsButton">
+            <BarChart3 size={16} />
+          </IconButton>
           <div className="timerMenuContainer" ref={menuContainer}>
             <button type="button" className="iconButton" aria-label="更多操作" title="更多操作" aria-haspopup="menu"
               aria-expanded={menuOpen} aria-controls="timer-menu" ref={menuButton} onClick={() => setMenuOpen((open) => !open)}
@@ -204,9 +187,6 @@ function TimerView({
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("stats"))}><BarChart3 size={15} />打开统计</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("settings"))}><SettingsIcon size={15} />打开设置</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onCommand("reset"))}><RotateCcw size={15} />重新开始当前轮次</button>
-                <button type="button" role="menuitem" disabled={changingWindowMode} onClick={() => menuAction(() => onWindowMode(mini ? "regular" : "mini"))}>
-                  {mini ? <Maximize2 size={15} /> : <Minimize2 size={15} />}{modeLabel}
-                </button>
               </div>
             )}
           </div>
@@ -243,6 +223,7 @@ function TimerView({
               <time className={remaining.length > 5 ? "longDuration" : undefined}>{remaining}</time>
               <span className="dialTotal">共 {formatDuration(snapshot.round.totalDurationMs)}</span>
             </div>
+            <div className="microProgress" aria-hidden="true"><span style={{ width: `${progressPercent}%` }} /></div>
           </div>
         </div>
 
@@ -647,8 +628,6 @@ export function App(): ReactElement {
   const [view, setView] = useState<View>("timer");
   const [fatalError, setFatalError] = useState<{ title: string; message: string; storage: boolean } | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
-  const [windowMode, setWindowMode] = useState<WindowMode>("regular");
-  const [changingWindowMode, setChangingWindowMode] = useState(false);
   const statisticsRequest = useRef(0);
 
   const syncStats = useCallback(async () => {
@@ -675,26 +654,13 @@ export function App(): ReactElement {
     setSettings(await window.pomodoro.updateSettings(patch));
   }, []);
 
-  const changeWindowMode = useCallback(async (mode: WindowMode) => {
-    setChangingWindowMode(true);
-    try {
-      setWindowMode(await window.pomodoro.setWindowMode(mode));
-      setOperationError(null);
-    } catch (reason) {
-      setOperationError(reason instanceof Error ? reason.message : "窗口模式切换失败，请重试");
-    } finally {
-      setChangingWindowMode(false);
-    }
-  }, []);
-
   useEffect(() => {
     let active = true;
-    void Promise.all([window.pomodoro.getSnapshot(), window.pomodoro.getSettings(), window.pomodoro.getWindowMode()])
-      .then(([nextSnapshot, nextSettings, nextWindowMode]) => {
+    void Promise.all([window.pomodoro.getSnapshot(), window.pomodoro.getSettings()])
+      .then(([nextSnapshot, nextSettings]) => {
         if (active) {
           setSnapshot(nextSnapshot);
           setSettings(nextSettings);
-          setWindowMode(nextWindowMode);
         }
       })
       .catch((reason) => {
@@ -708,7 +674,6 @@ export function App(): ReactElement {
         setStatistics(event.statistics);
         setStatisticsError(null);
       }
-      if (event.type === "window.modeChanged") setWindowMode(event.mode);
       if (event.type === "core.error") {
         if (event.recoverable) setOperationError(event.message);
         else setFatalError({ title: event.code === "STORAGE_UNAVAILABLE" ? "本地存储不可用" : "计时核心不可用", message: event.message, storage: event.code === "STORAGE_UNAVAILABLE" });
@@ -720,10 +685,6 @@ export function App(): ReactElement {
       unsubscribe();
     };
   }, []);
-
-  useEffect(() => {
-    document.documentElement.dataset.windowMode = windowMode;
-  }, [windowMode]);
 
   useEffect(() => {
     if (!settings) return;
@@ -778,7 +739,7 @@ export function App(): ReactElement {
     {view === "settings" ? <SettingsView settings={settings} onSave={saveSettings} onBack={() => setView("timer")} />
       : view === "stats" ? <StatsView statistics={statistics} settings={settings} error={statisticsError}
         onRetry={() => void syncStats()} onBack={() => setView("timer")} />
-        : <TimerView snapshot={snapshot} settings={settings} windowMode={windowMode} changingWindowMode={changingWindowMode}
-          onWindowMode={(mode) => void changeWindowMode(mode)} onCommand={(command) => void runCommand(command)} onView={setView} />}
+        : <TimerView snapshot={snapshot} settings={settings}
+          onCommand={(command) => void runCommand(command)} onView={setView} />}
   </div>;
 }

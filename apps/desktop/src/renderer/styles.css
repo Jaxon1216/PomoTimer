@@ -266,6 +266,10 @@ select:focus-visible {
   transform: rotate(-90deg);
 }
 
+.microProgress {
+  display: none;
+}
+
 .dialTrack,
 .dialProgress {
   fill: none;
@@ -298,7 +302,7 @@ select:focus-visible {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: clamp(3px, calc(var(--dial-size) * 0.022), 5px);
+  gap: clamp(1px, calc(var(--dial-size) * 0.01), 4px);
 }
 
 .dialContent time {
@@ -470,7 +474,9 @@ select:focus-visible {
   z-index: 2;
   top: calc(100% + 4px);
   right: 0;
-  width: 184px;
+  width: min(184px, calc(100vw - 20px));
+  max-height: calc(100vh - 44px);
+  overflow-y: auto;
   padding: 5px;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -493,68 +499,16 @@ select:focus-visible {
   font-size: 12px;
 }
 
+.timerMenu button svg {
+  flex-shrink: 0;
+}
+
 .timerMenu button:not(:disabled):hover {
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 
 .timerMenu button:disabled {
   opacity: 0.4;
-}
-
-.mini .titlebar {
-  height: 34px;
-  flex-basis: 34px;
-  justify-content: flex-end;
-  padding: 0 8px 0 var(--window-titlebar-leading);
-}
-
-.mini .brand,
-.mini .timerFooter,
-.mini .dialTotal {
-  display: none;
-}
-
-.mini .timerStage {
-  grid-template-areas: "meta" "dial" "status" "controls";
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 16px minmax(96px, 1fr) 32px 32px;
-  gap: 4px;
-  padding: 4px 12px 8px;
-}
-
-.mini .timerDial {
-  --dial-size: min(100cqw, 100cqh, 140px);
-}
-
-.mini .roundMeta {
-  gap: 5px;
-}
-
-.mini .roundMeta h1 {
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 550;
-}
-
-.mini .breakMode {
-  font-size: 11px;
-}
-
-.mini .timerStatus {
-  align-items: center;
-  gap: 2px;
-}
-
-.mini .monitorStatus {
-  text-align: center;
-}
-
-.mini .statePill {
-  line-height: 16px;
-}
-
-.mini .monitorStatus {
-  line-height: 14px;
 }
 
 .pageHeader {
@@ -1064,10 +1018,6 @@ input[aria-invalid="true"] {
 }
 
 @media (max-width: 335px) {
-  .titlebar .brand {
-    display: none;
-  }
-
   :root[data-platform="macos"] .pageHeader {
     justify-content: flex-start;
   }
@@ -1128,6 +1078,201 @@ input[aria-invalid="true"] {
 
   .weekDay {
     min-width: 0;
+  }
+}
+
+/* 紧凑布局只改变信息密度；窗口尺寸不进入 React 或计时状态。 */
+@media (max-width: 299px), (max-height: 279px) {
+  .titlebar {
+    height: 34px;
+    flex-basis: 34px;
+  }
+
+  .titlebar .brand,
+  .statisticsButton,
+  .timerFooter,
+  .dialTotal {
+    display: none;
+  }
+
+  .timerStage {
+    grid-template-areas: "meta" "dial" "status" "controls";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 16px minmax(0, 1fr) minmax(28px, max-content) 32px;
+    gap: clamp(2px, 1vh, 4px);
+    padding: 2px 12px 6px;
+  }
+
+  .timerDial {
+    --dial-size: min(100cqw, 100cqh, 140px);
+  }
+
+  .roundMeta {
+    gap: 5px;
+  }
+
+  .roundMeta h1 {
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  .breakMode {
+    font-size: 11px;
+  }
+
+  .timerStatus {
+    align-items: center;
+    gap: 2px;
+  }
+
+  .statePill {
+    gap: 5px;
+    font-size: 11px;
+    line-height: 14px;
+  }
+
+  .monitorStatus {
+    font-size: 10px;
+    line-height: 12px;
+    text-align: center;
+  }
+
+  .timerMenu button {
+    font-size: 11px;
+  }
+
+  .operationError {
+    top: 38px;
+  }
+}
+
+/* 极矮窄窗口让数字直接使用可用空间，避免圆环把文字压到不可读。 */
+@media (max-width: 359px) and (max-height: 219px) {
+  .timerStage {
+    row-gap: 2px;
+  }
+
+  .timerDial {
+    width: min(100cqw, 220px);
+    height: 100cqh;
+  }
+
+  .timerDial svg {
+    display: none;
+  }
+
+  .dialContent {
+    bottom: 7px;
+  }
+
+  .dialContent time {
+    font-size: clamp(28px, min(27cqw, calc(100cqh - 10px)), 42px);
+  }
+
+  .dialContent time.longDuration {
+    font-size: clamp(26px, min(23cqw, calc(100cqh - 10px)), 36px);
+  }
+
+  .microProgress {
+    position: absolute;
+    right: 0;
+    bottom: 2px;
+    left: 0;
+    display: block;
+    height: 2px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--track);
+  }
+
+  .microProgress span {
+    display: block;
+    height: 100%;
+    background: var(--round-color, var(--focus));
+  }
+}
+
+@media (min-width: 360px) and (max-height: 240px) {
+  .timerStage {
+    max-width: 600px;
+    grid-template-areas: "dial meta" "dial status" "dial controls";
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    grid-template-rows: minmax(18px, 1fr) minmax(28px, max-content) minmax(32px, 1fr);
+    gap: 6px 12px;
+    padding: 4px 16px 8px;
+  }
+
+  .timerDial {
+    --dial-size: min(100cqw, 100cqh, 180px);
+  }
+
+  .roundMeta,
+  .timerControls {
+    justify-content: flex-start;
+  }
+
+  .timerStatus {
+    align-items: flex-start;
+  }
+
+  .monitorStatus {
+    text-align: left;
+  }
+}
+
+@media (max-width: 199px) {
+  .settingsFooter {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 6px 12px;
+  }
+
+  .saveHint {
+    font-size: 10px;
+    line-height: 12px;
+    text-align: center;
+  }
+
+  .statsHero,
+  .sectionTitle {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .statsHero > div:first-child {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .statsSection {
+    overflow-x: auto;
+  }
+
+  .weekBars {
+    min-width: 196px;
+  }
+
+  .infoNote svg {
+    flex-shrink: 0;
+  }
+}
+
+@media (max-height: 219px) {
+  .pageHeader {
+    min-height: 40px;
+  }
+
+  .inlineError {
+    max-height: 28px;
+    flex-shrink: 0;
+  }
+
+  .failureSurface {
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 12px;
+    overflow: auto;
   }
 }
 

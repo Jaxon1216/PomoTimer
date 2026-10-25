@@ -15,7 +15,6 @@ import type {
   Settings,
   StatisticsSnapshot,
   TimerSnapshot,
-  WindowMode,
 } from "../shared/contracts";
 
 const snapshot: TimerSnapshot = {
@@ -143,8 +142,6 @@ describe("App", () => {
       getSnapshot: vi.fn().mockResolvedValue(snapshot),
       getSettings: vi.fn().mockResolvedValue(settings),
       getCapabilities: vi.fn().mockResolvedValue(capabilities),
-      getWindowMode: vi.fn().mockResolvedValue("regular"),
-      setWindowMode: vi.fn().mockImplementation(async (mode: WindowMode) => mode),
       getStatistics: vi.fn().mockResolvedValue({
         generatedAt: "2026-09-08T09:00:00.000Z",
         today: { localDate: "2026-09-08", completedFocusMinutes: 0, completedFocusRounds: 0 },
@@ -172,7 +169,6 @@ describe("App", () => {
       screen.getByRole("button", { name: "开始计时" }),
     ).toBeEnabled();
     expect(screen.getByRole("button", { name: "跳到下一轮" })).toBeEnabled();
-    expect(screen.getByRole("main")).toHaveAttribute("data-window-mode", "regular");
     fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
     expect(screen.getByRole("menuitem", { name: "重新开始当前轮次" })).toBeEnabled();
   });
@@ -202,7 +198,7 @@ describe("App", () => {
     ).toBeEnabled();
   });
 
-  it("resizes regular presentation without selecting mini mode or changing the Core snapshot", async () => {
+  it("keeps the authoritative timer snapshot while resizing from micro to full presentation", async () => {
     window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({
       ...snapshot,
       status: "manual-paused",
@@ -213,63 +209,33 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "专注" });
 
-    vi.stubGlobal("innerWidth", 320);
-    vi.stubGlobal("innerHeight", 300);
-    fireEvent.resize(window);
-    expect(screen.getByRole("main")).not.toHaveClass("mini");
-    expect(screen.getByRole("main")).toHaveAttribute("data-window-mode", "regular");
-    expect(screen.getByText("120:00")).toBeInTheDocument();
-    expect(screen.getByText("手动暂停 · 点击继续")).toBeInTheDocument();
-
-    vi.stubGlobal("innerWidth", 360);
-    vi.stubGlobal("innerHeight", 478);
-    fireEvent.resize(window);
-    expect(screen.getByRole("main")).not.toHaveClass("mini");
-    expect(screen.getByText("120:00")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "继续计时" })).toBeEnabled();
-    expect(window.pomodoro.command).not.toHaveBeenCalled();
-    expect(window.pomodoro.setWindowMode).not.toHaveBeenCalled();
-    expect(window.pomodoro.getSnapshot).toHaveBeenCalledTimes(1);
-  });
-
-  it("follows explicit Main window mode events without changing timer state", async () => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "专注" });
-
-    act(() => eventListener?.({ type: "window.modeChanged", mode: "mini" }));
-    expect(screen.getByRole("main")).toHaveClass("mini");
-    expect(screen.getByRole("main")).toHaveAttribute("data-window-mode", "mini");
-    expect(screen.getByText("30:00")).toBeInTheDocument();
-
-    act(() => eventListener?.({ type: "window.modeChanged", mode: "regular" }));
-    expect(screen.getByRole("main")).not.toHaveClass("mini");
-    expect(screen.getByRole("main")).toHaveAttribute("data-window-mode", "regular");
+    for (const [width, height] of [[160, 180], [220, 240], [360, 180], [320, 300], [360, 478]]) {
+      vi.stubGlobal("innerWidth", width);
+      vi.stubGlobal("innerHeight", height);
+      fireEvent.resize(window);
+      expect(screen.getByText("120:00")).toBeInTheDocument();
+      expect(screen.getByText("手动暂停 · 点击继续")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "继续计时" })).toBeEnabled();
+    }
     expect(window.pomodoro.command).not.toHaveBeenCalled();
     expect(window.pomodoro.getSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("explicitly enters mini mode and restores regular mode through the menu", async () => {
+  it("offers navigation and timer actions without manual window-size controls", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "专注" });
-    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "切换迷你模式" }));
-
-    await waitFor(() => expect(screen.getByRole("main")).toHaveClass("mini"));
-    expect(window.pomodoro.setWindowMode).toHaveBeenCalledWith("mini");
-    expect(screen.queryByRole("button", { name: "打开统计" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /切换迷你|恢复常规/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
     expect(screen.getByRole("menuitem", { name: "打开统计" })).toBeEnabled();
     expect(screen.getByRole("menuitem", { name: "打开设置" })).toBeEnabled();
     expect(screen.getByRole("menuitem", { name: "重新开始当前轮次" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("menuitem", { name: "恢复常规窗口" }));
-
-    await waitFor(() => expect(screen.getByRole("main")).not.toHaveClass("mini"));
-    expect(window.pomodoro.setWindowMode).toHaveBeenCalledWith("regular");
+    expect(screen.getAllByRole("menuitem")).toHaveLength(3);
     expect(window.pomodoro.command).not.toHaveBeenCalled();
   });
 
-  it.each(["regular", "mini"] as const)("keeps menu navigation reachable in %s mode", async (mode) => {
-    window.pomodoro.getWindowMode = vi.fn().mockResolvedValue(mode);
+  it.each([[160, 180], [360, 478]])("keeps menu navigation available at %s×%s", async (width, height) => {
+    vi.stubGlobal("innerWidth", width);
+    vi.stubGlobal("innerHeight", height);
     render(<App />);
     await screen.findByRole("heading", { name: "专注" });
 
@@ -279,8 +245,9 @@ describe("App", () => {
     expect(window.pomodoro.command).not.toHaveBeenCalled();
   });
 
-  it("keeps the complete unavailable-monitoring reason visible in mini mode", async () => {
-    window.pomodoro.getWindowMode = vi.fn().mockResolvedValue("mini");
+  it("keeps the complete unavailable-monitoring reason at the minimum window size", async () => {
+    vi.stubGlobal("innerWidth", 160);
+    vi.stubGlobal("innerHeight", 180);
     window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({
       ...snapshot,
       status: "auto-paused",
@@ -294,7 +261,6 @@ describe("App", () => {
 
     expect(await screen.findByText("输入检测不可用")).toBeInTheDocument();
     expect(screen.getByText("已暂停 · 可手动继续")).toBeInTheDocument();
-    expect(screen.getByRole("main")).toHaveClass("mini");
     expect(screen.getByRole("button", { name: "继续计时" })).toBeEnabled();
     expect(window.pomodoro.command).not.toHaveBeenCalled();
   });
@@ -303,7 +269,6 @@ describe("App", () => {
     ["idle", "准备开始", "开始计时"],
     ["manual-paused", "手动暂停 · 点击继续", "继续计时"],
   ] as const)("keeps unavailable input monitoring visible without overriding %s state", async (status, statusLabel, actionLabel) => {
-    window.pomodoro.getWindowMode = vi.fn().mockResolvedValue("mini");
     window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({
       ...snapshot,
       status,
@@ -398,13 +363,6 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("uses the Core error path when the initial window mode cannot be read", async () => {
-    window.pomodoro.getWindowMode = vi.fn().mockRejectedValue(new Error("window mode unavailable"));
-    render(<App />);
-    expect(await screen.findByRole("heading", { name: "计时核心不可用" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "开始计时" })).not.toBeInTheDocument();
-  });
-
   it.each([
     ["专注时长", "", "请输入 5–120 之间的整数"],
     ["专注时长", "4", "请输入 5–120 之间的整数"],
@@ -450,12 +408,11 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled();
   });
 
-  it.each(["command", "window mode"])("keeps the timer usable after a failed %s operation", async (operation) => {
-    if (operation === "command") window.pomodoro.command = vi.fn().mockRejectedValue(new Error("操作失败"));
-    else window.pomodoro.setWindowMode = vi.fn().mockRejectedValue(new Error("操作失败"));
+  it("keeps the timer usable after a failed command", async () => {
+    window.pomodoro.command = vi.fn().mockRejectedValue(new Error("操作失败"));
     render(<App />);
     await screen.findByRole("heading", { name: "专注" });
-    fireEvent.click(screen.getByRole("button", { name: operation === "command" ? "开始计时" : "切换迷你模式" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始计时" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("操作失败");
     expect(screen.getByRole("heading", { name: "专注" })).toBeVisible();
     expect(screen.getByRole("button", { name: "开始计时" })).toBeEnabled();
