@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, Menu, Notification, nativeImage, powerMonitor, screen, Tray, ipcMain, type IpcMainInvokeEvent, type NativeImage } from "electron";
+import { app, BrowserWindow, dialog, Menu, Notification, nativeImage, nativeTheme, powerMonitor, screen, Tray, ipcMain, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { capabilitiesSchema, coreEventSchema, settingsPatchSchema, settingsSchema, timerCommandSchema, timerSnapshotSchema, type CoreEvent, type TimerSnapshot } from "../shared/contracts.js";
 import { SqliteStore, StoreRecoveryError, rebuildSqliteStore } from "./store.js";
 import { TimerEngine } from "./timer.js";
@@ -148,6 +148,12 @@ function runTrayCommand(command: Parameters<TimerEngine["command"]>[0]): void {
     if (!runtimeFailure) broadcast({ type: "core.error", code: "COMMAND_REJECTED", message: reason instanceof Error ? reason.message : "计时操作未完成", recoverable: true });
   }
 }
+function windowsCaption() {
+  const theme = engine?.settings.theme ?? "system";
+  const dark = theme === "dark" || (theme === "system" && nativeTheme.shouldUseDarkColors);
+  return { height: windowsCaptionHeight, color: dark ? "#252b39" : "#f4f1eb", symbolColor: dark ? "#f6f2eb" : "#242321" };
+}
+
 function createWindow(): BrowserWindow {
   // 领域：Electron / 主进程
   // 顺序：应用启动链第 3 站，Main -> BrowserWindow -> Renderer 标题栏布局。
@@ -162,12 +168,17 @@ function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     show: false,
     titleBarStyle: macOS ? "hiddenInset" : windows ? "hidden" : "default",
-    ...(windows ? { titleBarOverlay: { height: windowsCaptionHeight, color: "#edeae5", symbolColor: "#393631" } } : {}),
+    ...(windows ? { titleBarOverlay: windowsCaption() } : {}),
     ...(macOS ? { trafficLightPosition: { x: 14, y: 14 } } : {}),
     backgroundColor: "#f6f3ee",
     webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
   });
-  if (windows) window.removeMenu();
+  if (windows) {
+    window.removeMenu();
+    const refreshCaption = () => window.setTitleBarOverlay(windowsCaption());
+    nativeTheme.on("updated", refreshCaption);
+    window.once("closed", () => nativeTheme.off("updated", refreshCaption));
+  }
   windowLayout.initialize(window);
   window.on("will-resize", (event, bounds, details) => windowLayout.willResize(window, bounds, details.edge, event));
   window.on("resize", () => windowLayout.didResize(window));
@@ -189,7 +200,17 @@ function installIpc(): void {
   ipcMain.handle("pomodoro:get-capabilities", (event) => { assertSender(event); return capabilities; });
   ipcMain.handle("pomodoro:get-statistics", (event) => { assertSender(event); return coreOperation(() => statistics()); });
   ipcMain.handle("pomodoro:command", (event, raw: unknown) => { assertSender(event); return runCommand(timerCommandSchema.parse(raw)); });
-  ipcMain.handle("pomodoro:update-settings", (event, raw: unknown) => { assertSender(event); const patch = settingsPatchSchema.parse(raw); return coreOperation(() => { const settings = currentEngine().applySettings(patch); mainWindow?.setAlwaysOnTop(settings.alwaysOnTop); publishSnapshot(); return settings; }); });
+  ipcMain.handle("pomodoro:update-settings", (event, raw: unknown) => {
+    assertSender(event);
+    const patch = settingsPatchSchema.parse(raw);
+    return coreOperation(() => {
+      const settings = currentEngine().applySettings(patch);
+      mainWindow?.setAlwaysOnTop(settings.alwaysOnTop);
+      if (process.platform === "win32" && patch.theme) mainWindow?.setTitleBarOverlay(windowsCaption());
+      publishSnapshot();
+      return settings;
+    });
+  });
 }
 function startMonitoring(): void {
   monitorTimer = setInterval(() => {

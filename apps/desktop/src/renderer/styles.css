@@ -76,7 +76,6 @@ body {
 /* Windows 的系统按钮独占第一行；下方计时器的可用高度不包含这行。 */
 :root[data-platform="windows"] body {
   --caption-height: env(titlebar-area-height, 32px);
-  background: #edeae5;
 }
 
 :root[data-platform="windows"] body::before {
@@ -85,7 +84,7 @@ body {
   height: var(--caption-height);
   overflow: hidden;
   padding-inline: min(10px, env(titlebar-area-width, 0px));
-  color: #393631;
+  color: var(--foreground);
   font-size: 12px;
   line-height: var(--caption-height);
   white-space: nowrap;
