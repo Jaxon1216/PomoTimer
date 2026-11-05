@@ -4,7 +4,7 @@
 
 仓库名为 **PomoTimer**，安装包以 **Pomodot** 发布，应用内名称为 **Pomodoro Timer**。
 
-[下载安装包](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.2) · [设计文档](docs/README.md) · [路线图](docs/roadmap.md) · [问题反馈](https://github.com/Jaxon1216/PomoTimer/issues)
+[下载安装包](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.2) · [更新记录](CHANGELOG.md) · [文档索引](docs/README.md) · [问题反馈](https://github.com/Jaxon1216/PomoTimer/issues)
 
 ## 下载与安装
 
@@ -43,6 +43,14 @@ beta.2 已知问题：
 - **桌面控制**：常规/迷你窗口、置顶、托盘菜单、系统通知，以及浅色/深色/跟随系统主题。
 - **恢复与数据保护（主分支）**：睡眠与重启不补计离线时间；锁屏门禁、输入故障下的显式手动计时、单实例保护、SQLite 故障备份与用户确认重建。
 
+### 界面预览
+
+| 常规窗口 · 等待开始 | 迷你挂件 · 等待活动休息 |
+| --- | --- |
+| <img src="docs/assets/screenshots/timer-light.png" width="360" alt="常规窗口显示第一轮专注、30 分钟倒计时和开始按钮"> | <img src="docs/assets/screenshots/long-break-waiting-mini.png" width="220" alt="迷你挂件显示 10 分钟长休，等待离席后自动开始"> |
+
+截图来自 macOS 上的真实 Electron 测试窗口。查看[设置与统计截图、版本和重现方法](docs/README.md#产品截图)。
+
 ### 基本使用
 
 1. 打开应用，点击开始进入第一轮专注。
@@ -55,6 +63,8 @@ beta.2 已知问题：
 应用离线运行，设置、计时快照和完成记录保存在当前设备的 SQLite 数据库中，文件为 Electron `app.getPath("userData")` 下的 `pomodoro.sqlite`。
 
 系统输入检测只读取“距最近一次系统输入的秒数”，不记录按键内容、鼠标位置、活动窗口或屏幕内容。当前没有账号、云同步或遥测，也没有启用摄像头检测；摄像头在场和手动站立专注属于后续阶段，Linux 不在当前支持范围。
+
+开发版只在内存中使用闲置秒数和推断出的在场状态。重启后会恢复轮次和剩余时间，等新的输入采样再判断在场状态。从旧版本升级时，已有备份保留原样；详见[更新记录](CHANGELOG.md)。
 
 ## 从源码开发
 
@@ -105,17 +115,21 @@ apps/desktop/src/main/      Electron 集成、计时核心、统计和 SQLite
 apps/desktop/src/preload/   受限的类型化桌面 API
 apps/desktop/src/renderer/  React 界面与样式
 apps/desktop/src/shared/    IPC 类型与运行时 schema
+apps/desktop/resources/     打包进应用的图标与托盘资源
 tests/e2e/                 Electron 跨进程测试
 scripts/                   原生验证、打包检查和发布辅助脚本
+.github/                    PR 模板、检查与发布工作流
 docs/                      产品、架构、契约与路线图
+docs/assets/screenshots/   供阅读文档使用的产品截图
 ```
 
 ## 文档与反馈
 
+- 新接手开发时，先读[协作约定](AGENTS.md)，从[更新记录](CHANGELOG.md)了解已发布与待发布的改动，再按[文档索引](docs/README.md)找到本次改动涉及的规格、代码入口和验收要求。
 - [产品规格](docs/product-spec.md)：默认值、计时规则和交互边界。
 - [技术架构](docs/architecture.md)：进程职责、平台集成和数据保护。
 - [IPC 与持久化契约](docs/contracts.md)：类型、事件和数据库模型。
 - [分阶段路线图](docs/roadmap.md)：当前范围、未来能力和发布门。
-- [协作约定](AGENTS.md) · [第三方资源说明](docs/third-party-notices.md)。
+- [第三方资源说明](docs/third-party-notices.md)：字体和视觉参考来源。
 
 欢迎通过 [Issues](https://github.com/Jaxon1216/PomoTimer/issues) 反馈问题。请附上操作系统、芯片架构、安装包版本或源码 commit、复现步骤，以及预期与实际结果；分享截图或日志前请先移除个人信息和本地路径。
