@@ -43,7 +43,7 @@ export const automationStateSchema = z.object({
 }).strict();
 export type AutomationState = z.infer<typeof automationStateSchema>;
 
-export const timerSnapshotSchema = z.object({
+export const timerProgressSchema = z.object({
   revision: z.number().int().min(0),
   emittedAt: z.string().datetime({ offset: true }),
   round: roundSchema,
@@ -52,8 +52,9 @@ export const timerSnapshotSchema = z.object({
   activeCycleRounds: z.number().int().min(1).max(8).optional(),
   status: timerStatusSchema,
   remainingMs: z.number().int().nonnegative(),
-  automation: automationStateSchema,
-}).strict().superRefine((snapshot, context) => {
+}).strict();
+
+export const timerSnapshotSchema = timerProgressSchema.extend({ automation: automationStateSchema }).superRefine((snapshot, context) => {
   if (snapshot.status === "manual-paused" && !snapshot.automation.manualPauseLocked) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["automation", "manualPauseLocked"], message: "手动暂停必须保持锁定" });
   }

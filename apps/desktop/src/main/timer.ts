@@ -1,4 +1,5 @@
 import { timerSnapshotSchema, type Presence, type Round, type Settings, type TimerCommand, type TimerSnapshot } from "../shared/contracts.js";
+import { checkpointOf, type TimerCheckpoint } from "./checkpoint.js";
 
 export interface CompletedSession {
   id: string;
@@ -13,9 +14,9 @@ export interface CompletedSession {
 }
 
 export interface TimerStore {
-  loadSnapshot(): TimerSnapshot | undefined;
-  saveSnapshot(snapshot: TimerSnapshot): void;
-  commitCompletedSessionAndSnapshot(session: CompletedSession, snapshot: TimerSnapshot): void;
+  loadSnapshot(): TimerCheckpoint | undefined;
+  saveSnapshot(snapshot: TimerCheckpoint): void;
+  commitCompletedSessionAndSnapshot(session: CompletedSession, snapshot: TimerCheckpoint): void;
   loadSettings?(): Settings;
   saveSettings?(settings: Settings): void;
 }
@@ -60,6 +61,7 @@ export class TimerEngine {
   private storageFailed = false;
   private completedRoundsRevisionValue = 0;
   private persistedState = "";
+  private emittedAutomation = "";
   private pendingBreakCountdown: { startedAt: number; idleStartedAt: number } | undefined;
   private activeCycleRounds: number;
   private readonly clock: TimerClock;
@@ -71,24 +73,19 @@ export class TimerEngine {
     this.settingsValue = settings ?? store.loadSettings?.() ?? defaultSettings;
     const persisted = store.loadSnapshot();
     this.activeCycleRounds = persisted?.activeCycleRounds ?? this.settingsValue.focusRoundsPerCycle;
-    this.snapshotValue = persisted
-      ? {
-          ...persisted,
-          activeCycleRounds: this.activeCycleRounds,
-          status: persisted.status === "running" ? "auto-paused" : persisted.status,
-          automation: {
-            ...persisted.automation,
-            // A manual pause is a user decision and must survive restart.
-            manualPauseLocked: persisted.status === "manual-paused"
-              ? true
-              : persisted.automation.manualPauseLocked,
-            pauseReason: persisted.status === "running" || (persisted.status === "auto-paused" && persisted.automation.pauseReason === "system-lock")
-              ? "core-recovery"
-              : persisted.automation.pauseReason,
-          },
-        }
-      : this.initialSnapshot();
-    this.inputAvailable = this.snapshotValue.automation.inputMonitoringAvailable;
+    this.snapshotValue = this.initialSnapshot();
+    if (persisted) {
+      const { interruption, ...progress } = persisted;
+      const status = progress.status === "running" ? "auto-paused" : progress.status;
+      this.snapshotValue = {
+        ...progress, activeCycleRounds: this.activeCycleRounds, status,
+        automation: {
+          ...this.snapshotValue.automation,
+          manualPauseLocked: status === "manual-paused",
+          pauseReason: status === "auto-paused" ? interruption ?? "core-recovery" : "none",
+        },
+      };
+    }
     this.persist();
   }
 
@@ -197,7 +194,7 @@ export class TimerEngine {
       } else if (this.snapshotValue.status === "auto-paused" && shouldRun) {
         this.startRunning(now - confirmedCountdownMs);
         if (confirmedCountdownMs > 0) this.tick();
-      } else if (this.snapshotValue.status === "auto-paused" && this.snapshotValue.automation.pauseReason === "source-unavailable") {
+      } else if (this.snapshotValue.status === "auto-paused" && (this.snapshotValue.automation.pauseReason === "source-unavailable" || this.snapshotValue.automation.pauseReason === "core-recovery")) {
         this.snapshotValue.automation.pauseReason = conditionReason;
       }
     }
@@ -363,12 +360,13 @@ export class TimerEngine {
             activeDurationSeconds: Math.floor(current.totalDurationMs / 1000),
             mode: "seated",
           },
-          this.snapshotValue,
+          checkpointOf(this.snapshotValue),
         );
       } else {
         this.persist();
       }
       this.persistedState = this.snapshotState();
+      this.emittedAutomation = JSON.stringify(this.snapshotValue.automation);
       this.completedRoundsRevisionValue += 1;
     } catch (error) {
       // Keep the just-finished round retryable. The Store transaction has
@@ -414,27 +412,31 @@ export class TimerEngine {
 
   // 领域：Timer / 检查点
   // 顺序：命令或输入采样 -> emit -> snapshotState -> persist。
-  // 作用：只在剩余时间或业务状态改变时更新检查点。
-  // 原因：静止轮次无需为每次相同输入写入数据库，运行中仍持续保存剩余时间。
-  // 边界：候选休息计时仅存在内存中；revision 和 emittedAt 不触发独立写入。
+  // 作用：可见状态变化更新 IPC revision，只有可恢复的进度变化才写检查点。
+  // 原因：输入采样能刷新界面，但不应在 SQLite 中留下采样记录或写入时间。
+  // 边界：候选休息计时和监测状态只存在于内存，运行中的剩余时间仍定期保存。
   private emit(): TimerSnapshot {
     this.snapshotValue.automation.inputPresence = this.inputPresence;
-    if (!this.storageFailed && this.snapshotState() === this.persistedState) return timerSnapshotSchema.parse(this.snapshotValue);
+    const progressChanged = this.snapshotState() !== this.persistedState;
+    const automation = JSON.stringify(this.snapshotValue.automation);
+    if (!progressChanged && automation === this.emittedAutomation) return timerSnapshotSchema.parse(this.snapshotValue);
     this.snapshotValue.revision += 1;
     this.snapshotValue.emittedAt = new Date().toISOString();
-    this.persist();
+    if (progressChanged) this.persist();
+    this.emittedAutomation = automation;
     return timerSnapshotSchema.parse({ ...this.snapshotValue });
   }
 
   private persist(): void {
     if (this.storageFailed) return;
-    this.store.saveSnapshot(this.snapshotValue);
+    this.store.saveSnapshot(checkpointOf(this.snapshotValue));
     this.persistedState = this.snapshotState();
+    this.emittedAutomation = JSON.stringify(this.snapshotValue.automation);
   }
 
   private snapshotState(): string {
-    const { round, activeCycleRounds, status, remainingMs, automation } = this.snapshotValue;
-    return JSON.stringify({ round, activeCycleRounds, status, remainingMs, automation });
+    const { round, activeCycleRounds, status, remainingMs, interruption } = checkpointOf(this.snapshotValue);
+    return JSON.stringify({ round, activeCycleRounds, status, remainingMs, interruption });
   }
 
   private assertStorageAvailable(): void {
