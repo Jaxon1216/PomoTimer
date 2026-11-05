@@ -15,7 +15,10 @@ const applicationEntry = join(desktopDirectory, "out", "main", "index.js");
 type DesktopRuntime = ReturnType<typeof import("../../apps/desktop/src/main/index").inspectDesktopRuntime>;
 type LaunchApplication = (userDataDirectory: string) => Promise<ElectronApplication>;
 
-const test = baseTest.extend<{ launchApplication: LaunchApplication }>({
+const test = baseTest.extend<{ launchApplication: LaunchApplication }, { windowsHitTestExecutable: string | undefined }>({
+  windowsHitTestExecutable: [async ({}, use, workerInfo) => {
+    await use(process.platform === "win32" ? await buildWindowsHitTest(workerInfo.project.outputDir) : undefined);
+  }, { scope: "worker", timeout: 65_000 }],
   launchApplication: async ({}, use, testInfo) => {
     const applications = new Set<ElectronApplication>();
     let launchCount = 0;
@@ -46,13 +49,6 @@ const test = baseTest.extend<{ launchApplication: LaunchApplication }>({
       await Promise.all([...applications].map((application) => application.close()));
     }
   },
-});
-
-let windowsHitTestExecutable: string;
-test.beforeAll("build the Windows native hit-test probe", async ({}, testInfo) => {
-  if (process.platform !== "win32") return;
-  testInfo.setTimeout(65_000);
-  windowsHitTestExecutable = await buildWindowsHitTest(testInfo.project.outputDir);
 });
 
 async function inspectRuntime(application: ElectronApplication): Promise<DesktopRuntime> {
@@ -318,7 +314,7 @@ test("starts through the restricted preload bridge and preserves native settings
   await restarted.close();
 });
 
-test("limits tall windows while keeping short and wide timer layouts available", async ({ launchApplication }, testInfo) => {
+test("limits tall windows while keeping short and wide timer layouts available", async ({ launchApplication, windowsHitTestExecutable }, testInfo) => {
   const app = await launchApplication(testInfo.outputPath("user-data"));
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
@@ -342,7 +338,7 @@ test("limits tall windows while keeping short and wide timer layouts available",
   const start = window.getByRole("button", { name: "开始计时" });
   await expect(start).toHaveText("");
   const box = await start.boundingBox();
-  if (process.platform === "win32") await assertWindowsTimerHitTests(windowsHitTestExecutable, app, window);
+  if (windowsHitTestExecutable) await assertWindowsTimerHitTests(windowsHitTestExecutable, app, window);
   expect(box?.width).toBe(32);
   expect(box?.height).toBe(32);
   await expect(window.getByRole("button", { name: "打开统计" })).toBeInViewport();
