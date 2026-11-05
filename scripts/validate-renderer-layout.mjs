@@ -129,7 +129,7 @@ try {
   const page = await context.newPage();
   page.on("console", (message) => console.log(`[renderer:${message.type()}] ${message.text()}`));
   page.on("pageerror", (error) => console.error(`[renderer:error] ${error.message}`));
-  for (const [width, height] of [[160, 180], [160, 240], [200, 300], [220, 240], [240, 300], [319, 478], [320, 480], [360, 299], [360, 300], [360, 478], [360, 180], [720, 180]]) {
+  for (const [width, height] of [[160, 180], [160, 240], [200, 300], [220, 240], [240, 300], [319, 478], [320, 480], [360, 262], [360, 263], [360, 299], [360, 300], [360, 478], [360, 180], [720, 180]]) {
     await page.setViewportSize({ width, height });
     await page.goto(renderer);
     await page.getByText("30:00", { exact: true }).waitFor();
@@ -153,12 +153,14 @@ try {
     await page.screenshot({ path: join(output, `timer-${width}x${height}.png`) });
   }
 
-  await page.setViewportSize({ width: 160, height: 180 });
   await page.goto(`${renderer}?duration=7200000`);
   await page.getByText("120:00", { exact: true }).waitFor();
   await settle(page);
-  const longDuration = await geometry(page);
-  assert.equal(longDuration.fits, true, "120:00 must stay inside the ring");
+  for (const [width, height] of [[360, 262], [360, 263], [160, 180]]) {
+    await page.setViewportSize({ width, height });
+    const longDuration = await geometry(page);
+    assert.equal(longDuration.fits, true, `${width}x${height}: 120:00 must stay inside the ring`);
+  }
   await page.screenshot({ path: join(output, "timer-120-minutes.png") });
 
   await page.getByRole("button", { name: "更多操作" }).click();

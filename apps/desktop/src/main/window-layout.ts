@@ -3,6 +3,8 @@ interface Size {
   height: number;
 }
 
+type ResizeEdge = Electron.WillResizeDetails["edge"] | "top";
+
 export interface WindowRectangle extends Size {
   x: number;
   y: number;
@@ -18,6 +20,7 @@ interface NativeWindow {
 }
 
 export const initialContentSize: Size = { width: 360, height: 478 };
+export const windowsCaptionHeight = 32;
 const minimumContentSize: Size = { width: 160, height: 180 };
 
 function fitWindowSize(bounds: Size, frame: Size): Size {
@@ -34,7 +37,7 @@ function sameSize(a: Size, b: Size): boolean {
 // 领域：Electron / 窗口布局
 // 顺序：BrowserWindow 创建、resize、关闭 -> WindowLayout -> 原生边界。
 // 作用：按内容宽度限制高度，在本次进程内恢复位置和大小。
-// 原因：Windows 的原生边框和标题栏占用外框尺寸，macOS 只报告拖动的主轴。
+// 原因：Windows 边框占用外框尺寸；AppKit 只报告拖动主轴和旧原点，需在 resize 时用实际原点确定固定边。
 // 边界：仅约束普通窗口，不改变最大化、全屏或计时状态。
 export class WindowLayout {
   private placement?: WindowRectangle;
@@ -45,13 +48,14 @@ export class WindowLayout {
   constructor(
     private readonly platform: NodeJS.Platform,
     private readonly workAreaFor: (bounds: WindowRectangle) => WindowRectangle,
+    private readonly captionHeight = 0,
   ) {}
 
   initialize(window: NativeWindow): void {
     const current = window.getBounds();
     const content = window.getContentBounds();
     this.beforeMacResize = undefined;
-    this.frame = { width: current.width - content.width, height: current.height - content.height };
+    this.frame = { width: current.width - content.width, height: current.height - content.height + this.captionHeight };
     window.setMinimumSize(minimumContentSize.width + this.frame.width, minimumContentSize.height + this.frame.height);
     const desired = {
       x: this.placement?.x ?? current.x,
@@ -76,7 +80,7 @@ export class WindowLayout {
     this.placement = { ...bounds, width: bounds.width - this.frame.width, height: bounds.height - this.frame.height };
   }
 
-  willResize(window: NativeWindow, proposed: WindowRectangle, edge: string, event: { preventDefault(): void }): void {
+  willResize(window: NativeWindow, proposed: WindowRectangle, edge: ResizeEdge, event: { preventDefault(): void }): void {
     this.beforeMacResize = undefined;
     if (this.writingBounds || !window.isNormal()) return;
     const size = fitWindowSize(proposed, this.frame);
@@ -84,7 +88,6 @@ export class WindowLayout {
 
     const current = window.getBounds();
     if (this.platform === "darwin") {
-      // AppKit 报告主轴和旧原点；边界不动时直接拦截，其余交给 resize 的实际原点。
       if (sameSize(size, current)) event.preventDefault();
       else this.beforeMacResize = current;
       return;

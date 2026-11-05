@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { PomodoroApi, TimerSnapshot } from "../../apps/desktop/src/shared/contracts";
+import { assertWindowsTimerHitTests } from "./windows-hit-test";
 
 const workspaceRoot = process.cwd();
 const desktopDirectory = existsSync(join(workspaceRoot, "apps/desktop/out/main/index.js"))
@@ -180,7 +181,7 @@ async function assertTimerLayout(page: Page, orientation?: "horizontal" | "verti
       items, overlaps, textOverflow,
       horizontal: dial.right <= meta.left + 0.5,
       vertical: meta.bottom <= dial.top + 0.5,
-      fullRegular: innerWidth >= 320 && innerHeight >= 300,
+      fullRegular: innerWidth >= 320 && document.getElementById("root")!.clientHeight >= 300,
       statusBesideControls: status.right <= controls.left + 0.5
         && status.top < controls.bottom && status.bottom > controls.top,
     };
@@ -209,7 +210,7 @@ async function assertHeaderFit(page: Page): Promise<void> {
     return {
       viewport: { width: innerWidth, height: innerHeight },
       boxes,
-      fullRegular: innerWidth >= 320 && innerHeight >= 300,
+      fullRegular: innerWidth >= 320 && document.getElementById("root")!.clientHeight >= 300,
       actionsRightMargin: innerWidth - document.querySelector(".titleActions")!.getBoundingClientRect().right,
       nativeOverlap: document.documentElement.dataset.platform === "macos"
         && boxes.some((box) => box.left < 80 && box.right > 14 && box.top < 30 && box.bottom > 14),
@@ -226,10 +227,11 @@ async function assertHeaderFit(page: Page): Promise<void> {
 }
 
 async function resizeContent(application: ElectronApplication, page: Page, width: number, height: number, expected = { width, height }): Promise<void> {
+  const caption = await page.evaluate(() => document.getElementById("root")!.getBoundingClientRect().top);
   await application.evaluate(({ BrowserWindow }, size) => {
     BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height);
-  }, { width, height });
-  await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(expected);
+  }, { width, height: height + caption });
+  await expect.poll(() => page.locator("#root").evaluate((root) => ({ width: root.clientWidth, height: root.clientHeight }))).toEqual(expected);
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
@@ -264,7 +266,7 @@ test("starts through the restricted preload bridge and preserves native settings
   await expect(window.locator("time")).toHaveText("30:00");
   await settleVisuals(window);
   await assertTimerLayout(window, "vertical");
-  expect(await window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 360, height: 478 });
+  await expect.poll(() => window.locator("#root").evaluate((root) => [root.clientWidth, root.clientHeight])).toEqual([360, 478]);
   await window.screenshot({ path: testInfo.outputPath("timer-light.png") });
   await window.getByRole("button", { name: "开始计时" }).click();
   await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
@@ -311,6 +313,7 @@ test("starts through the restricted preload bridge and preserves native settings
 
 test("limits tall windows while keeping short and wide timer layouts available", async ({ launchApplication }, testInfo) => {
   const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
   await expect(window.locator("time")).toHaveText("30:00");
   await resizeContent(app, window, 160, 640, { width: 160, height: 240 });
@@ -322,10 +325,17 @@ test("limits tall windows while keeping short and wide timer layouts available",
   await window.screenshot({ path: testInfo.outputPath("timer-short-wide.png") });
 
   await resizeContent(app, window, 100, 100, { width: 160, height: 180 });
+  if (process.platform === "win32") {
+    await window.keyboard.press("Alt");
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMenuBarVisible())).toBe(false);
+    const timer = await window.locator("#root").boundingBox();
+    expect(timer).toMatchObject({ y: 32, width: 160, height: 180 });
+  }
   await assertTimerLayout(window);
   const start = window.getByRole("button", { name: "开始计时" });
   await expect(start).toHaveText("");
   const box = await start.boundingBox();
+  if (process.platform === "win32") await assertWindowsTimerHitTests(app, window);
   expect(box?.width).toBe(32);
   expect(box?.height).toBe(32);
   await expect(window.getByRole("button", { name: "打开统计" })).toBeInViewport();
@@ -776,7 +786,11 @@ test("a runtime SQLite failure freezes the core and remains visible after render
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   await expect(window.getByRole("heading", { name: "本地存储不可用" })).toBeVisible();
-  await expect(window.getByText("计时已安全暂停，请重新打开应用后重试。", { exact: true })).toBeVisible();
+  await resizeContent(app, window, 160, 180);
+  await expect(window.getByRole("heading", { name: "本地存储不可用" })).toBeInViewport({ ratio: 1 });
+  await window.mouse.move(80, 90);
+  await window.mouse.wheel(0, 300);
+  await expect(window.getByText("计时已安全暂停，请重新打开应用后重试。", { exact: true })).toBeInViewport({ ratio: 1 });
   await expect(window.getByRole("button", { name: "开始计时" })).toHaveCount(0);
   await expect(window.evaluate(() => window.pomodoro.command("resume"))).rejects.toThrow(/本地数据不可用/);
   await window.reload();

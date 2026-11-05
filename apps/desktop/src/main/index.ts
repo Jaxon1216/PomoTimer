@@ -5,7 +5,7 @@ import { app, BrowserWindow, dialog, Menu, Notification, nativeImage, powerMonit
 import { capabilitiesSchema, coreEventSchema, settingsPatchSchema, settingsSchema, timerCommandSchema, timerSnapshotSchema, type CoreEvent, type TimerSnapshot } from "../shared/contracts.js";
 import { SqliteStore, StoreRecoveryError, rebuildSqliteStore } from "./store.js";
 import { TimerEngine } from "./timer.js";
-import { WindowLayout, initialContentSize } from "./window-layout.js";
+import { WindowLayout, initialContentSize, windowsCaptionHeight } from "./window-layout.js";
 import { collectStatistics, localDateKey } from "./statistics.js";
 
 let mainWindow: BrowserWindow | undefined;
@@ -22,7 +22,8 @@ let lastStatisticsRevision = 0;
 let lastStatisticsDate = "";
 let lastTrayState = "";
 const trayToolTip = "Pomodoro Timer";
-const windowLayout = new WindowLayout(process.platform, (bounds) => screen.getDisplayMatching(bounds).workArea);
+const windowLayout = new WindowLayout(process.platform, (bounds) => screen.getDisplayMatching(bounds).workArea,
+  process.platform === "win32" ? windowsCaptionHeight : 0);
 
 // 领域：Electron / 生命周期
 // 顺序：应用启动链第 1 站，OS 启动 -> 单实例锁 -> Main 初始化。
@@ -150,20 +151,23 @@ function runTrayCommand(command: Parameters<TimerEngine["command"]>[0]): void {
 function createWindow(): BrowserWindow {
   // 领域：Electron / 主进程
   // 顺序：应用启动链第 3 站，Main -> BrowserWindow -> Renderer 标题栏布局。
-  // 作用：只在 macOS 启用 hiddenInset 和原生 traffic-light 位置。
-  // 原因：macOS 原生按钮属于窗口外观；Windows 必须保留默认标题栏和内容尺寸换算。
+  // 作用：macOS 使用内嵌交通灯，Windows 在独立标题栏区域保留系统窗口按钮。
+  // 原因：Electron 在 Windows 默认边框下忽略网页拖动区；标题栏覆盖层允许原生拖动。
   // 边界：不向 Renderer 暴露 Node、路径或通用 IPC，只由浏览器平台标记控制受控 CSS。
   const macOS = process.platform === "darwin";
+  const windows = process.platform === "win32";
   const window = new BrowserWindow({
     ...initialContentSize,
     useContentSize: true,
     autoHideMenuBar: true,
     show: false,
-    titleBarStyle: macOS ? "hiddenInset" : "default",
+    titleBarStyle: macOS ? "hiddenInset" : windows ? "hidden" : "default",
+    ...(windows ? { titleBarOverlay: { height: windowsCaptionHeight, color: "#edeae5", symbolColor: "#393631" } } : {}),
     ...(macOS ? { trafficLightPosition: { x: 14, y: 14 } } : {}),
     backgroundColor: "#f6f3ee",
     webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
   });
+  if (windows) window.removeMenu();
   windowLayout.initialize(window);
   window.on("will-resize", (event, bounds, details) => windowLayout.willResize(window, bounds, details.edge, event));
   window.on("resize", () => windowLayout.didResize(window));

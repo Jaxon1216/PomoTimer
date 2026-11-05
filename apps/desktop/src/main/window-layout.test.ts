@@ -4,6 +4,7 @@ import { WindowLayout, type WindowRectangle } from "./window-layout.js";
 const desktop = { x: 0, y: 0, width: 1920, height: 1080 };
 const noFrame = { width: 0, height: 0 };
 const windowsFrame = { width: 16, height: 39 };
+const resizeEdges = ["left", "right", "top", "bottom", "top-left", "bottom-left", "top-right", "bottom-right"] as const;
 
 class FakeWindow {
   bounds: WindowRectangle;
@@ -27,6 +28,17 @@ class FakeWindow {
 }
 
 describe("WindowLayout", () => {
+  it("reserves the Windows caption above the usable timer on open and resize", () => {
+    const window = new FakeWindow(windowsFrame);
+    const layout = new WindowLayout("win32", () => desktop, 32);
+    layout.initialize(window);
+    expect(window.setMinimumSize).toHaveBeenCalledWith(176, 251);
+    expect(window.getContentBounds().height - 32).toBe(478);
+    window.bounds = { x: 100, y: 100, width: 176, height: 600 };
+    layout.didResize(window);
+    expect(window.getContentBounds().height - 32).toBe(240);
+  });
+
   it("opens at 360×478 and sets a 160×180 content minimum including the Windows frame", () => {
     const window = new FakeWindow(windowsFrame);
     const layout = new WindowLayout("win32", () => desktop);
@@ -60,7 +72,7 @@ describe("WindowLayout", () => {
     expect(window.setBounds).toHaveBeenCalledTimes(width === expectedWidth && height === expectedHeight ? 0 : 1);
   });
 
-  it.each(["left", "right", "top", "bottom", "top-left", "bottom-left", "top-right", "bottom-right"])(
+  it.each(resizeEdges)(
     "clamps the Windows %s grip on the first proposal and anchors the opposite edge",
     (edge) => {
       const window = new FakeWindow(windowsFrame);
@@ -88,7 +100,7 @@ describe("WindowLayout", () => {
     },
   );
 
-  it.each(["top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right", "left", "right"])(
+  it.each(resizeEdges)(
     "uses actual macOS origins for the %s grip when AppKit reports only the dominant axis",
     (grip) => {
       const window = new FakeWindow();
@@ -97,7 +109,6 @@ describe("WindowLayout", () => {
       const old = window.getBounds();
       const width = grip === "top" || grip === "bottom" ? old.width : 200;
       const height = grip === "left" || grip === "right" ? old.height : 700;
-      // Electron 33 keeps the old Cocoa origin in the proposal, regardless of the real grip.
       const axis = old.width - width > height - old.height ? "right" : "bottom";
       const proposed = { x: old.x, y: old.y + old.height - height, width, height };
       const event = { preventDefault: vi.fn() };
