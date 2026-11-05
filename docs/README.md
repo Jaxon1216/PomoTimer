@@ -8,7 +8,7 @@
 | 现在做什么，还有哪些真机检查？ | [路线图](./roadmap.md)区分当前阶段、发布门和后续阶段。 |
 | 谁持有计时状态，谁能读写数据库？ | [技术架构](./architecture.md)定义进程职责、时间来源和测试边界。 |
 | 可以发送哪些命令和事件？数据怎样保存？ | [IPC 与持久化契约](./contracts.md)列出接口、快照、事件和数据库模型。 |
-| 一个界面操作怎样传到 Main 并返回？ | [前端请求流程](./request-flow.md)追踪命令、采样、统计和窗口切换。 |
+| 一个界面操作怎样传到 Main 并返回？ | [前端请求流程](./request-flow.md)追踪命令、采样和统计，并说明原生窗口缩放。 |
 | 为什么采用这样的节奏和隐私边界？ | [研究与决策](./research-and-decisions.md)记录证据、取舍和重新评估条件。 |
 | 如何给跨进程和状态机代码写注释？ | [代码注释约定](./code-commenting.md)含格式和示例。 |
 | 字体和视觉参考从哪里来？ | [第三方声明](./third-party-notices.md)说明素材来源。 |
@@ -17,16 +17,15 @@
 
 ## 产品截图
 
-以下四张 PNG 取自 macOS 26.4.1（Apple Silicon）上的真实 Electron 窗口内容区。测试用独立临时数据目录，仅展示示例状态。源码为提交 [f90e522](https://github.com/Jaxon1216/PomoTimer/commit/f90e5228f04fa2105de747dfa5681daad079ad52)，当时的包版本为 `0.1.0-beta.2`；对照标签下载的安装包时，以对应发布说明为准。
+以下截图取自 macOS 26.4.1（Apple Silicon）上的真实 Electron 测试窗口，使用独立临时数据目录。计时器的三张截图来自当前开发版。设置和统计截图取自较早的提交，当时的包版本为 `0.1.0-beta.2`。[历史截图对应提交 f90e522](https://github.com/Jaxon1216/PomoTimer/commit/f90e5228f04fa2105de747dfa5681daad079ad52)
 
 | 界面 | 可查看的状态 |
 | --- | --- |
-| [常规计时器](./assets/screenshots/timer-light.png) | 第一轮专注，等待用户开始。 |
-| [迷你挂件](./assets/screenshots/long-break-waiting-mini.png) | 220×240 挂件等待开始 10 分钟活动休息；此测试将闲置阈值自定义为 600 秒。 |
+| [初始计时器](./assets/screenshots/timer-light.png) | 第一轮专注，等待用户开始。 |
+| [拖小窗口](./assets/screenshots/long-break-waiting-compact.png) | 220×240 小窗等待开始 10 分钟活动休息，测试的闲置阈值为 600 秒。 |
+| [最小窗口](./assets/screenshots/drag-minimum-interrupted-break.png) | 在 160×180 的窗口中，短休因输入暂停，可直接点击圆形播放按钮继续。 |
 | [设置](./assets/screenshots/settings-dark.png) | 切换到深色主题，开启常驻顶部。 |
 | [统计](./assets/screenshots/stats-dark.png) | 独立测试数据中还没有完成的专注轮。 |
-
-开发版的[最小窗口截图](./assets/screenshots/drag-minimum-interrupted-break.png)来自 macOS 上的 Electron 测试窗口。常规窗口缩到 160×180 后，短休因输入暂停，窗口中仍可看到原因并直接点击“继续”。
 
 在仓库根目录运行 `npm run test:e2e`，可从 `apps/desktop/test-results/` 的对应测试输出中取同名文件。截图用例见[桌面 E2E](../tests/e2e/phase0.e2e.ts)。界面有可见变化时，只更新受影响的图并核对内容、平台和版本。这里仅收录用于描述产品的截图，完整运行日志和诊断图保留在测试输出目录。
 

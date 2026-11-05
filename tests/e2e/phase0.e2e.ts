@@ -180,7 +180,7 @@ async function assertTimerLayout(page: Page, orientation?: "horizontal" | "verti
       items, overlaps, textOverflow,
       horizontal: dial.right <= meta.left + 0.5,
       vertical: meta.bottom <= dial.top + 0.5,
-      fullRegular: innerWidth >= 320 && innerHeight >= 300 && !document.querySelector(".timerSurface")!.classList.contains("mini"),
+      fullRegular: innerWidth >= 320 && innerHeight >= 300,
       statusBesideControls: status.right <= controls.left + 0.5
         && status.top < controls.bottom && status.bottom > controls.top,
     };
@@ -209,7 +209,7 @@ async function assertHeaderFit(page: Page): Promise<void> {
     return {
       viewport: { width: innerWidth, height: innerHeight },
       boxes,
-      fullRegular: innerWidth >= 320 && innerHeight >= 300 && !document.querySelector(".timerSurface")!.classList.contains("mini"),
+      fullRegular: innerWidth >= 320 && innerHeight >= 300,
       actionsRightMargin: innerWidth - document.querySelector(".titleActions")!.getBoundingClientRect().right,
       nativeOverlap: document.documentElement.dataset.platform === "macos"
         && boxes.some((box) => box.left < 80 && box.right > 14 && box.top < 30 && box.bottom > 14),
@@ -265,7 +265,6 @@ test("starts through the restricted preload bridge and preserves native settings
   await settleVisuals(window);
   await assertTimerLayout(window, "vertical");
   expect(await window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 360, height: 478 });
-  expect(await window.evaluate(() => window.pomodoro.getWindowMode())).toBe("regular");
   await window.screenshot({ path: testInfo.outputPath("timer-light.png") });
   await window.getByRole("button", { name: "开始计时" }).click();
   await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
@@ -298,7 +297,7 @@ test("starts through the restricted preload bridge and preserves native settings
     hasMainInspector: Reflect.has(globalThis, Symbol.for("pomodoro.desktop.inspect")),
   }));
   expect(bridgeShape.apiKeys).toEqual([
-    "command", "getCapabilities", "getSettings", "getSnapshot", "getStatistics", "getWindowMode", "setWindowMode", "subscribe", "updateSettings",
+    "command", "getCapabilities", "getSettings", "getSnapshot", "getStatistics", "subscribe", "updateSettings",
   ]);
   expect(bridgeShape.hasNodeProcess).toBe(false);
   expect(bridgeShape.hasRequire).toBe(false);
@@ -310,84 +309,36 @@ test("starts through the restricted preload bridge and preserves native settings
   await restarted.close();
 });
 
-test("switches mini mode explicitly, enforces content minima, and restores the regular window", async ({ launchApplication }, testInfo) => {
+test("limits tall windows while keeping short and wide timer layouts available", async ({ launchApplication }, testInfo) => {
   const app = await launchApplication(testInfo.outputPath("user-data"));
-  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
   await expect(window.locator("time")).toHaveText("30:00");
-  // Let the real monitor publish its first controlled sample before comparing
-  // snapshots; unknown -> present is independent of window layout changes.
-  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).automation.inputPresence).toBe("present");
-  await resizeContent(app, window, 480, 420);
-  await resizeContent(app, window, 320, 300);
-  expect(await window.evaluate(() => window.pomodoro.getWindowMode())).toBe("regular");
-  await expect(window.locator(".timerSurface")).not.toHaveClass(/mini|compact/);
-  await assertTimerLayout(window, "vertical");
-  const minimumScale = await readTimerScale(window);
-  expect(minimumScale.time, "The countdown must remain prominent at 320×300").toBeGreaterThanOrEqual(36);
-  expect(minimumScale.time / minimumScale.title).toBeGreaterThanOrEqual(2);
+  await resizeContent(app, window, 160, 640, { width: 160, height: 240 });
+  await assertTimerLayout(window);
+  await window.screenshot({ path: testInfo.outputPath("timer-narrow-limit.png") });
+  await resizeContent(app, window, 200, 420, { width: 200, height: 300 });
+  await resizeContent(app, window, 263, 180);
+  await assertTimerLayout(window);
+  await window.screenshot({ path: testInfo.outputPath("timer-short-wide.png") });
 
-  await resizeContent(app, window, 480, 420);
-  await window.getByRole("button", { name: "开始计时" }).click();
-  await window.getByRole("button", { name: "暂停计时" }).click();
-  const paused = await window.evaluate(() => window.pomodoro.getSnapshot());
-  const eventMode = window.evaluate(() => new Promise<string>((resolve) => {
-    const unsubscribe = window.pomodoro.subscribe((event) => {
-      if (event.type === "window.modeChanged") {
-        unsubscribe();
-        resolve(event.mode);
-      }
-    });
-  }));
-  await window.getByRole("button", { name: "切换迷你模式" }).click();
-  expect(await eventMode).toBe("mini");
-  await expect(window.locator(".timerSurface")).toHaveClass(/mini/);
-  await expect.poll(() => window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 220, height: 240 });
-  expect(await window.evaluate(() => window.pomodoro.getWindowMode())).toBe("mini");
-  await assertTimerLayout(window, "vertical");
-  const miniScale = await readTimerScale(window);
-  expect(miniScale.time / miniScale.dial).toBeGreaterThanOrEqual(0.28);
-  expect(miniScale.time / miniScale.dial).toBeLessThanOrEqual(0.32);
-  await window.screenshot({ path: testInfo.outputPath("timer-mini.png") });
-  await resizeContent(app, window, 300, 360);
-  await assertTimerLayout(window, "vertical");
-  const expandedMiniScale = await readTimerScale(window);
-  expect(expandedMiniScale.dial).toBeGreaterThan(miniScale.dial + 20);
-  expect(expandedMiniScale.time).toBeGreaterThan(miniScale.time + 4);
-  expect(expandedMiniScale.time, "Mini countdown must scale beyond the previous 28px cap").toBeGreaterThan(28);
-  expect(expandedMiniScale.time / expandedMiniScale.dial).toBeGreaterThanOrEqual(0.28);
-  expect(expandedMiniScale.time / expandedMiniScale.dial).toBeLessThanOrEqual(0.32);
-  expect(await window.evaluate(() => window.pomodoro.getWindowMode())).toBe("mini");
-  const resizedMini = await window.evaluate(() => window.pomodoro.getSnapshot());
-  expect(resizedMini).toEqual({ ...paused, revision: resizedMini.revision, emittedAt: resizedMini.emittedAt });
-  await window.screenshot({ path: testInfo.outputPath("timer-mini-expanded.png") });
   await resizeContent(app, window, 100, 100, { width: 160, height: 180 });
   await assertTimerLayout(window);
+  const start = window.getByRole("button", { name: "开始计时" });
+  await expect(start).toHaveText("");
+  const box = await start.boundingBox();
+  expect(box?.width).toBe(32);
+  expect(box?.height).toBe(32);
+  await expect(window.getByRole("button", { name: "打开统计" })).toBeInViewport();
+  await window.screenshot({ path: testInfo.outputPath("timer-minimum-ready.png") });
   await openMore(window);
-  await expect(window.getByRole("menuitem", { name: "打开设置" })).toBeVisible();
-  await expect(window.getByRole("menuitem", { name: "打开统计" })).toBeVisible();
-  await window.getByRole("menuitem", { name: "恢复常规窗口" }).click();
-  await expect(window.locator(".timerSurface")).not.toHaveClass(/mini|compact/);
-  await expect.poll(() => window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 480, height: 420 });
-  const restored = await window.evaluate(() => window.pomodoro.getSnapshot());
-  expect(restored.status).toBe("manual-paused");
-  expect(restored.remainingMs).toBe(paused.remainingMs);
-  expect(restored.round).toEqual(paused.round);
-
-  const invalid = await window.evaluate(async () => {
-    try {
-      await Reflect.apply(window.pomodoro.setWindowMode, window.pomodoro, ["compact"]);
-      return { rejected: false, mode: await window.pomodoro.getWindowMode() };
-    } catch {
-      return { rejected: true, mode: await window.pomodoro.getWindowMode() };
-    }
-  });
-  expect(invalid).toEqual({ rejected: true, mode: "regular" });
-  await expect.poll(() => window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 480, height: 420 });
+  await expect(window.getByRole("menuitem", { name: /切换迷你|恢复常规/ })).toHaveCount(0);
+  await window.keyboard.press("Escape");
+  await start.click();
+  await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
   await app.close();
 });
 
-test("reflows regular layouts without resize transitions or resetting timer state", async ({ launchApplication }, testInfo) => {
+test("reflows the timer without resize transitions or resetting timer state", async ({ launchApplication }, testInfo) => {
   const app = await launchApplication(testInfo.outputPath("user-data"));
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
@@ -399,12 +350,11 @@ test("reflows regular layouts without resize transitions or resetting timer stat
   const sizes = [
     [320, 300, "vertical"], [480, 300, "vertical"], [320, 420, "vertical"], [360, 478, "vertical"],
     [335, 420, "vertical"], [336, 420, "vertical"],
-    [241, 478, "vertical"],
+    [241, 361, "vertical"],
     [299, 389, undefined], [301, 391, undefined], [299, 390, undefined], [301, 389, undefined], [360, 478, "vertical"],
   ] as const;
   for (const [width, height, orientation] of sizes) {
     await resizeContent(app, window, width, height);
-    expect(await window.evaluate(() => window.pomodoro.getWindowMode())).toBe("regular");
     await assertTimerLayout(window, orientation);
     const layoutTransitions = await window.locator(".timerSurface, .timerStage, .dialSlot, .timerDial, .roundMeta, .timerControls").evaluateAll((elements) => elements.flatMap((element) => {
       const style = getComputedStyle(element);
@@ -432,19 +382,16 @@ test("reflows regular layouts without resize transitions or resetting timer stat
       expect(Math.abs(scale.time - previousScale.time), "A 1px resize must not jump the countdown size").toBeLessThanOrEqual(2);
     }
     previousScale = scale;
-    expect(await window.evaluate(() => window.pomodoro.getWindowMode())).toBe("regular");
   }
   for (const [width, height] of [[320, 300], [320, 391], [480, 300], [360, 478]] as const) {
     await resizeContent(app, window, width, height);
     await assertTimerLayout(window, "vertical");
-    expect(await window.evaluate(() => window.pomodoro.getWindowMode())).toBe("regular");
   }
   for (const [width, height] of [[319, 299], [260, 260], [220, 240], [180, 200], [160, 180]] as const) {
     await resizeContent(app, window, width, height);
     await assertTimerLayout(window);
   }
   await resizeContent(app, window, 100, 100, { width: 160, height: 180 });
-  expect(await window.evaluate(() => window.pomodoro.getWindowMode())).toBe("regular");
   await expect(window.getByText("手动暂停 · 点击继续", { exact: true })).toBeVisible();
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
   await window.screenshot({ path: testInfo.outputPath("drag-minimum-paused.png") });
@@ -484,22 +431,16 @@ test("keeps long durations, break states, and input failure readable in each sup
       }
       await window.screenshot({ path: testInfo.outputPath(`${name}-${width}x${height}.png`) });
     }
-    for (const [width, height] of [[160, 478], [480, 180], [160, 180]] as const) {
+    for (const [width, height] of [[160, 240], [480, 180], [160, 180]] as const) {
       await resizeContent(app, window, width, height);
       await assertTimerLayout(window);
       await expect(window.locator(".statePill")).toBeVisible();
       await expect(window.getByRole("heading", { level: 1 })).toBeVisible();
     }
     await window.screenshot({ path: testInfo.outputPath(`${name}-minimum.png`) });
-    await window.evaluate(() => window.pomodoro.setWindowMode("mini"));
-    await expect(window.locator(".timerSurface")).toHaveClass(/mini/);
-    await assertTimerLayout(window, "vertical");
-    if (name !== "input-source-unavailable") {
-      await expect(window.locator(".monitorStatus")).toHaveText("系统输入检测 · 600 秒阈值");
-    }
-    await window.screenshot({ path: testInfo.outputPath(`${name}-mini.png`) });
-    await window.evaluate(() => window.pomodoro.setWindowMode("regular"));
-    await expect(window.locator(".timerSurface")).not.toHaveClass(/mini/);
+    await resizeContent(app, window, 220, 240);
+    await assertTimerLayout(window);
+    await window.screenshot({ path: testInfo.outputPath(`${name}-compact.png`) });
   };
   await checkLayouts("timer-120min");
   await window.getByRole("button", { name: "跳到下一轮" }).click();
@@ -617,7 +558,7 @@ test("confirms only the observed break countdown and discards it after renewed i
   await resizeContent(app, window, 160, 180);
   await assertTimerLayout(window);
   await expect(window.getByText("有输入 · 休息暂停", { exact: true })).toBeVisible();
-  await expect(window.getByRole("button", { name: "继续计时" }).getByText("继续", { exact: true })).toBeVisible();
+  await expect(window.getByRole("button", { name: "继续计时" })).toBeInViewport();
   await window.screenshot({ path: testInfo.outputPath("drag-minimum-interrupted-break.png") });
 
   const restartedEvent = window.evaluate(() => new Promise<TimerSnapshot>((resolve) => {
@@ -637,13 +578,11 @@ test("confirms only the observed break countdown and discards it after renewed i
   await app.close();
 });
 
-test("opens settings and statistics from mini mode and preserves scrollable settings and themes", async ({ launchApplication }, testInfo) => {
+test("opens settings and statistics at the minimum size and preserves scrollable settings and themes", async ({ launchApplication }, testInfo) => {
   const app = await launchApplication(testInfo.outputPath("user-data"));
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
   await expect(window.locator("time")).toHaveText("30:00");
-  await window.evaluate(() => window.pomodoro.setWindowMode("mini"));
-  await expect(window.locator(".timerSurface")).toHaveClass(/mini/);
   await resizeContent(app, window, 160, 180);
   await openMore(window);
   await window.getByRole("menuitem", { name: "打开设置" }).click();
@@ -670,11 +609,7 @@ test("opens settings and statistics from mini mode and preserves scrollable sett
   await expect(window.locator("html")).not.toHaveClass(/dark/);
   await window.getByRole("button", { name: /计时器/ }).click();
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
-  if (await window.evaluate(() => window.pomodoro.getWindowMode()) !== "mini") {
-    await window.evaluate(() => window.pomodoro.setWindowMode("mini"));
-  }
-  await openMore(window);
-  await window.getByRole("menuitem", { name: "打开统计" }).click();
+  await window.getByRole("button", { name: "打开统计" }).click();
   await expect(window.getByRole("heading", { name: "统计" })).toBeVisible();
   await assertPageHeaderFit(window);
   await window.getByRole("button", { name: /计时器/ }).click();

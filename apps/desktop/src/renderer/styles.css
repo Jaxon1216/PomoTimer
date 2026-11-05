@@ -99,6 +99,18 @@ select:focus-visible {
   background: var(--surface);
 }
 
+/* 菜单打开时，主体仍需接收点击事件，以便点击空白处收起菜单。 */
+.timerSurface:not(:has(.timerMenu)) {
+  -webkit-app-region: drag;
+}
+
+.timerSurface button,
+.timerMenu,
+.statePill,
+.operationError {
+  -webkit-app-region: no-drag;
+}
+
 .appShell {
   position: relative;
   display: flex;
@@ -218,14 +230,9 @@ select:focus-visible {
   transition: color 0.15s, background-color 0.15s, border-color 0.15s;
 }
 
-.iconButton:not(:disabled):hover {
+.iconButton:hover {
   color: var(--foreground);
   background: color-mix(in srgb, var(--foreground) 9%, transparent);
-}
-
-.iconButton:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
 }
 
 .timerStage {
@@ -245,10 +252,6 @@ select:focus-visible {
 
 .timerDetails {
   display: contents;
-}
-
-.actionCaption {
-  display: none;
 }
 
 .dialSlot {
@@ -420,10 +423,11 @@ select:focus-visible {
 }
 
 .timerControls .primary {
+  color: var(--foreground);
   border: 1px solid var(--line);
 }
 
-.timerControls .primary:not(:disabled):hover {
+.timerControls .primary:hover {
   color: var(--round-color, var(--accent));
   border-color: var(--round-color, var(--accent));
 }
@@ -503,18 +507,8 @@ select:focus-visible {
   font-size: 12px;
 }
 
-.timerMenu button:not(:disabled):hover {
+.timerMenu button:hover {
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
-}
-
-.timerMenu button:disabled {
-  opacity: 0.4;
-}
-
-.mini .brand,
-.mini .timerFooter,
-.mini .dialTotal {
-  display: none;
 }
 
 .pageHeader {
@@ -1092,69 +1086,22 @@ input[aria-invalid="true"] {
 }
 
 @media (width < 320px), (height < 300px) {
-  .timerSurface .titlebar {
+  .titlebar {
     height: clamp(32px, min(10vw + 12px, 10vh + 14px), 44px);
     flex-basis: auto;
+    padding-right: 6px;
   }
 
-  .timerSurface .timerStage {
-    grid-template-rows: minmax(clamp(16px, min(10vw - 4px, 10vh - 2px), 28px), max-content) minmax(0, 1fr) minmax(32px, max-content);
-    gap: clamp(2px, min(4vw - 6px, 4vh - 6px), 6px) 6px;
-    padding: 4px clamp(6px, 5vw - 2px, 16px) clamp(4px, 2.5vh, 8px);
-  }
-
-  .timerSurface .timerFooter {
-    height: clamp(0px, min(45vw - 104px, 50vh - 115px), 34px);
-    flex-basis: auto;
-    padding-bottom: clamp(0px, min(12vw - 27px, 14vh - 32px), 10px);
-  }
-}
-
-@media (max-width: 265px), (max-height: 262px) {
-  .timerFooter > *,
-  .dialTotal {
-    display: none;
-  }
-}
-
-@media (max-width: 240px), (max-height: 230px) {
-  .timerSurface .roundMeta h1 {
-    font-size: 13px;
-    line-height: 16px;
-  }
-
-  .timerSurface .monitorStatus[data-available="true"] {
-    display: none;
-  }
-
-  .timerSurface .timerControls .primary {
-    display: flex;
-    width: auto;
-    gap: 4px;
-    padding: 0 9px;
-    border-radius: 16px;
-  }
-
-  .timerSurface .actionCaption {
-    display: inline;
-    font-size: 12px;
-  }
-}
-
-@media (max-width: 240px) {
-  .titleActions .windowModeButton,
-  .titleActions .statisticsButton,
-  .timerSurface .breakMode {
-    display: none;
-  }
-
-  .timerSurface .timerStage {
+  .timerStage {
     grid-template-areas: "meta" "dial" "controls";
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: max-content minmax(0, 1fr) 32px;
+    grid-template-rows: max-content minmax(0, min(232px, calc(100vw - 12px))) 32px;
+    align-content: center;
+    gap: clamp(3px, calc(3vh - 2px), 10px);
+    padding: 6px;
   }
 
-  .timerSurface .timerDetails {
+  .timerDetails {
     display: flex;
     grid-area: meta;
     flex-wrap: wrap;
@@ -1163,27 +1110,42 @@ input[aria-invalid="true"] {
     gap: 1px 6px;
   }
 
-  .timerSurface .roundMeta {
-    flex: none;
+  .roundMeta h1 {
+    font-size: 13px;
+    line-height: 16px;
   }
 
-  .timerSurface .timerStatus {
+  .timerStatus {
     display: contents;
   }
 
-  .timerSurface .monitorStatus {
+  .monitorStatus {
     flex-basis: 100%;
     text-align: center;
   }
 
-  .timerSurface .statePill {
-    max-width: calc(100% - 36px);
+  .statePill {
     gap: 4px;
     font-size: 11px;
     line-height: 14px;
     text-wrap: balance;
   }
 
+  .timerControls {
+    gap: 8px;
+  }
+}
+
+@media (max-width: 265px), (max-height: 262px) {
+  .timerFooter,
+  .breakMode,
+  .dialTotal,
+  .monitorStatus[data-available="true"] {
+    display: none;
+  }
+}
+
+@media (max-width: 240px) {
   .statsHero {
     flex-wrap: wrap;
     gap: 6px;
@@ -1196,78 +1158,6 @@ input[aria-invalid="true"] {
   .timerMenu button {
     gap: 5px;
     padding-inline: 4px;
-  }
-}
-
-@media (min-width: 220px) and (min-height: 240px) {
-  .mini .titlebar {
-    height: 34px;
-    flex-basis: 34px;
-    justify-content: flex-end;
-    padding: 0 8px 0 var(--window-titlebar-leading);
-  }
-
-  .mini .timerStage {
-    grid-template-areas: "meta" "dial" "status" "controls";
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 16px minmax(96px, 1fr) 32px 32px;
-    gap: 4px;
-    padding: 4px 12px 8px;
-  }
-
-  .mini .timerDial {
-    --dial-size: min(100cqw, 100cqh, 140px);
-  }
-
-  .mini .roundMeta {
-    gap: 5px;
-  }
-
-  .mini .roundMeta h1 {
-    font-size: 12px;
-    line-height: 16px;
-    font-weight: 550;
-  }
-
-  .mini .breakMode {
-    font-size: 11px;
-  }
-
-  .mini .timerStatus {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-
-  .mini .monitorStatus {
-    text-align: center;
-  }
-
-  .mini .statePill {
-    max-width: 100%;
-    line-height: 16px;
-  }
-
-  .mini .monitorStatus {
-    line-height: 14px;
-  }
-
-  .mini .timerDetails {
-    display: contents;
-  }
-
-  .mini .breakMode,
-  .mini .monitorStatus[data-available="true"] {
-    display: block;
-  }
-
-  .mini .actionCaption {
-    display: none;
-  }
-
-  .mini .timerControls .primary {
-    width: 32px;
-    padding: 0;
   }
 }
 
