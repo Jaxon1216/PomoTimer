@@ -21,11 +21,11 @@ Main 在就绪及打开数据库之前取得单实例锁；同一 userData 的�
 
 ## 2. 进程边界
 
-React 只渲染快照、导航设置/统计视图、维护临时表单，并显示 Main 返回或广播的窗口模式。Preload 只暴露 `getSnapshot`、`command`、`getSettings`、`updateSettings`、`getCapabilities`、`getStatistics`、`getWindowMode`、`setWindowMode`、`subscribe`。Main 验证调用来源和 payload，广播经 Zod 校验的状态事件。
+React 渲染快照、导航设置和统计视图，并维护临时表单。Preload 只暴露 `getSnapshot`、`command`、`getSettings`、`updateSettings`、`getCapabilities`、`getStatistics`、`subscribe`。Main 验证调用来源和 payload，广播经 Zod 校验的状态事件。
 
 `TimerEngine` 使用单调时钟计算剩余时间，在内存中维护输入在场状态并向 Renderer 提供实时快照。Store 单独保存恢复计时所需的检查点、设置和已完成专注记录。重新打开应用时，Main 恢复轮次与手动暂停锁，在收到新的输入样本之前将在场状态设为 `unknown`。
 
-`regular | mini` 是 Main 管理的原生窗口状态，不属于 TimerEngine 或持久化设置。Main 在内存中分别记住每种模式的窗口 bounds，应用各自的最小内容尺寸，切换后返回当前模式并广播 `window.modeChanged`。Renderer 启动时并行读取模式与计时/设置数据；模式读取失败使用现有核心错误界面，不能猜测模式。原生尺寸变化只由 CSS 调整排布，React 不监听 resize 来切换迷你模式，也不为布局变化发送计时命令。
+Main 管理一个可缩放的 BrowserWindow，并根据内容区域约束原生窗口尺寸。Renderer 随视口宽高调整布局，通过 Electron 拖动区域移动窗口，按钮、菜单和表单保留普通指针交互。拖动和缩放由原生窗口处理。
 
 ## 3. 平台集成
 
@@ -36,8 +36,8 @@ React 只渲染快照、导航设置/统计视图、维护临时表单，并显�
 - Tray 只在展示秒数、可用操作或状态改变时重建菜单；完成通知依赖成功持久化后的完成计数，跳过轮次不发“轮次完成”。
 - 关闭窗口在 Windows 上隐藏到托盘，退出菜单设置退出标记后真正退出；macOS 遵循应用生命周期。
 - `contextIsolation`、sandbox、CSP、禁止导航和外部链接 allowlist 必须保持。
-- macOS 窗口使用 `hiddenInset` 时，Main 仅配置原生 traffic-light 位置；Renderer 根据浏览器平台标记预留受控标题栏安全区。Windows 使用默认原生标题栏，不继承 macOS 留白，最小尺寸换算仍以内容区域为准。
-- 首次启动使用常规模式 360×478；常规最小内容区域为 320×300，首次进入迷你模式和迷你最小区域均为 220×240。显式切回常规恢复之前的常规 bounds；模式和 bounds 仅在本次进程内保留，不写入 SQLite。常规模式保持竖向圆环构图、状态与操作同行，CSS 根据可用空间连续调整圆环、字号与留白；迷你模式保持状态与操作上下排列，拖动不改变构图或模式。
+- macOS 使用 `hiddenInset`，为左上角交通灯预留空间。Windows 使用 Electron 的 `hidden` 和 32 px 标题栏覆盖层，保留系统窗口按钮，停止使用会被 Alt 唤出的默认应用菜单。覆盖层单独占一行，Main 在约束内容尺寸时扣除该行；Renderer 按下方计时器的可用宽高排版。计时器留白在两个平台都由系统处理拖动，按钮仍可点击。
+- 初始内容区域为 360×478 px，最小为 160×180 px。Main 换算原生边框后，将内容高度限制在宽度的 1.5 倍以内，同时允许宽矮窗口。
 - 托盘资源与应用图标分离：macOS 从 `trayTemplate.png` 和 `trayTemplate@2x.png` 创建透明黑色 template `NativeImage` 并设置 tooltip；Windows 只加载 `.ico`，Dock 继续使用 `.icns`。
 - 原生验收使用独立临时 `userData`，由 Main 的真实 PID、`app.getPath("userData")` 和当前 Tray 的 `getBounds()` 确认实例。只有显式设置 `POMODORO_DIAGNOSTICS=1` 时，Node inspector 才可通过 Main 内部的只读 symbol 查询窗口、Tray 及其实际图像倍率；该能力不进入 preload 或 IPC。其他常驻应用无需退出。
 
@@ -53,6 +53,6 @@ React 只渲染快照、导航设置/统计视图、维护临时表单，并显�
 
 ## 5. 测试边界
 
-`TimerEngine` 用注入的单调时钟、墙钟和 Store 独立测试；Renderer 测试验证 Main 模式事件、菜单可达性、休息自动等待文案、故障可见和布局操作不发送计时命令。Electron E2E 验证真实 preload/IPC、显式模式切换与尺寸恢复、常规窄矮布局、控制、设置和事件同步。macOS/Windows 的 idle、通知、托盘和睡眠恢复仍需真实设备手工验证。
+`TimerEngine` 用注入的单调时钟、墙钟和 Store 独立测试。Renderer 测试验证计时控制、导航、休息等待文案和故障提示。布局检查覆盖最小窗口、窄窗的高度上限和宽矮窗口。Electron E2E 验证真实 preload/IPC、原生窗口尺寸、导航和计时事件同步。macOS/Windows 的 idle、通知、托盘和睡眠恢复仍需真实设备手工验证。
 
 `npm run test:store` 使用与 Electron 相同 ABI 的运行时验证真实 SQLite 的旧库兼容、校验和、事务回滚、去重及包含 WAL 的恢复副本。普通 PR CI 与发布 CI 均运行原生数据库测试和 Electron E2E；模拟电源事件只验证事件接线，不能替代真实锁屏和睡眠验收。
