@@ -11,7 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        # Match the release runner's Visual Studio 2022 toolchain for Electron's native SQLite module.
+        os: [macos-latest, windows-2022]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
