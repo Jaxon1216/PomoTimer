@@ -55,10 +55,14 @@ Main 每 500ms 广播权威快照；命令、输入采样、轮次变化、电�
 
 `stats.changed` 在完成记录事务提交后或本机日期变化时发布，不为跳过轮次增加统计。`core.error` 中 `STORAGE_UNAVAILABLE/recoverable=false` 表示计时已在内存中冻结、后台写入已停止，需要重新打开应用；`COMMAND_REJECTED/recoverable=true` 等普通操作错误只显示可恢复提示，不移除正常计时视图。
 
-检测故障下显式手动继续、锁屏门禁、完成通知计数仅存在于 TimerEngine 内存，不扩展 preload allowlist。有效检测恢复后取消临时手动回退；锁屏解除本身不启动计时。静止且业务状态相同的采样不增加 revision 或写数据库；运行中保留每秒检查点，不能依赖 revision 推断采样次数。
+检测故障下显式手动继续、锁屏门禁、完成通知计数仅存在于 TimerEngine 内存，不扩展 preload allowlist。有效检测恢复后取消临时手动回退；锁屏解除本身不启动计时。若变化仅涉及在场状态或检测可用性，实时快照更新 revision，SQLite 不写入。相同的静止样本保持 revision，运行中的轮次仍按秒保存进度。
 
 ## 5. SQLite 数据模型
 
-保留并兼容既有表：`schema_migrations`、`settings`、单行 `timer_snapshot`、`completed_focus_sessions`。只有完整结束的 focus 写入 `completed_focus_sessions`；next、reset、退出、睡眠、自动/手动暂停都不写入。`INSERT OR IGNORE` 以 UUID 防止完成事件重复。统计按 `local_date` 聚合今日、本周和最近 52 周数据。
+保留并兼容既有表：`schema_migrations`、`settings`、单行 `timer_snapshot`、`completed_focus_sessions`。只有完整结束的 focus 写入 `completed_focus_sessions`。完成记录使用由周期和专注轮次生成的稳定 ID，`INSERT OR IGNORE` 防止重试重复计数。统计按 `local_date` 聚合今日、本周和最近 52 周数据。
+
+`TimerSnapshot` 是运行时 IPC 契约。闲置秒数只在 Main 内存中使用，Renderer 通过实时快照读取推断出的在场状态。SQLite 的计时检查点只保存恢复轮次所需的数据，普通检查点与完成专注的事务使用同一写入格式。重启后，在场状态为 `unknown`，直到收到有效样本。升级时，可读取的旧检查点转换为新格式，设置和完成记录继续保留。既有备份和故障恢复归档按原样保存，可能包含旧版本写入的字段。
+
+Store 每次打开数据库都会尝试将 WAL 合入主文件并截断。若外部读取连接仍占用旧页，逻辑检查点已完成转换，旧页清理会在下次打开时重试。此时复制的原始文件也可能包含旧版本的数据。
 
 初始化、迁移或快照读取失败先复制数据库及现存 WAL/SHM 文件并关闭连接。恢复入口只在 Main 的原生对话框中提供，备份成功且用户显式选择后才归档原文件并重建；不增加 Renderer 数据库或路径能力，不修改已发布迁移。

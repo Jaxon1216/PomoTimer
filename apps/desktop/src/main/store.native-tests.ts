@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { timerSnapshotSchema } from "../shared/contracts.js";
-import { defaultSettings, type CompletedSession } from "./timer.js";
+import { checkpointOf } from "./checkpoint.js";
+import { defaultSettings, TimerEngine, type CompletedSession } from "./timer.js";
 import { rebuildSqliteStore, SqliteStore, StoreRecoveryError } from "./store.js";
 
 const legacySchema = `
@@ -49,12 +50,15 @@ test("upgrades the original four-table schema without changing its checksum or e
   legacy.prepare("INSERT INTO schema_migrations VALUES(1,?,?)").run("phase0-initial-schema-v1", "2025-01-01T00:00:00.000Z");
   legacy.prepare("INSERT INTO settings VALUES('settings',?,?)").run(JSON.stringify({ ...defaultSettings, theme: "dark" }), "2025-01-01T00:00:00.000Z");
   legacy.prepare("INSERT INTO completed_focus_sessions VALUES(?,?,?,?,?,?,?,?,?)").run("legacy-go-session", "2026-10-22T00:30:00.000Z", "2026-10-22", 480, 1, 1, 1800, 1800, "seated");
-  legacy.prepare("INSERT INTO timer_snapshot VALUES(1,1,0,?,?)").run(JSON.stringify(initialSnapshot()), "2025-01-01T00:00:00.000Z");
+  const previous = initialSnapshot();
+  delete previous.activeCycleRounds; // Version 1 predates the per-cycle round count.
+  previous.automation.inputPresence = "present";
+  legacy.prepare("INSERT INTO timer_snapshot VALUES(1,1,0,?,?)").run(JSON.stringify(previous), "2025-01-01T00:00:00.000Z");
   legacy.close();
   const store = new SqliteStore(directory);
   try {
     assert.equal(store.loadSettings().theme, "dark");
-    assert.deepEqual(store.loadSnapshot(), initialSnapshot());
+    assert.deepEqual(new TimerEngine(store, { now: () => 0, wallDate: () => new Date(0) }).snapshot, initialSnapshot());
     assert.deepEqual(store.dailyTotals("2026-10-22", "2026-10-22"), [{ localDate: "2026-10-22", completedFocusMinutes: 30, completedFocusRounds: 1 }]);
   } finally { store.close(); }
   const migrated = new Database(join(directory, "pomodoro.sqlite"));
@@ -63,8 +67,73 @@ test("upgrades the original four-table schema without changing its checksum or e
       { version: 1, checksum: "phase0-initial-schema-v1" },
       { version: 2, checksum: "electron-sqlite-v2-compatible" },
       { version: 3, checksum: "electron-sqlite-v3-timer-state" },
+      { version: 4, checksum: "electron-sqlite-v4-private-checkpoint" },
     ]);
+    const row = migrated.prepare("SELECT schema_version, snapshot_json FROM timer_snapshot").get() as { schema_version: number; snapshot_json: string };
+    assert.equal(row.schema_version, 4);
+    assert.doesNotMatch(row.snapshot_json, /automation|inputPresence|cameraPresence|present/);
   } finally { migrated.close(); }
+}));
+
+test("new checkpoints, completion transactions, shutdown and recovery copies contain no presence samples", () => withDirectory((directory) => {
+  const store = new SqliteStore(directory);
+  let now = 0;
+  try {
+    const engine = new TimerEngine(store, { now: () => now, wallDate: () => new Date(0) });
+    engine.command("start");
+    assert.equal(engine.inputSample(40).automation.pauseReason, "input-away");
+    assert.equal(engine.inputSample(0).automation.inputPresence, "present");
+    now += engine.snapshot.remainingMs;
+    assert.equal(engine.snapshot.round.kind, "short-break");
+    assert.equal(engine.inputSample(40).status, "running");
+    engine.systemSuspend(); // Same path as Main's before-quit hook.
+    const backup = store.prepareRecovery(new Error("test recovery copy")).backupDirectory;
+    assert.ok(backup);
+    for (const [name, bytes] of Object.entries(backupContents(backup))) {
+      assert.equal(/inputPresence|cameraPresence|inputMonitoringAvailable|input-away|break-condition|"present"|"away"/.test(bytes.toString("latin1")), false, name);
+    }
+    const recovered = new SqliteStore(directory);
+    try {
+      const restored = new TimerEngine(recovered, { now: () => now, wallDate: () => new Date(0) });
+      assert.equal(restored.snapshot.status, "auto-paused");
+      assert.equal(restored.snapshot.automation.inputPresence, "unknown");
+      assert.equal(restored.snapshot.automation.pauseReason, "system-suspend");
+      assert.equal(recovered.dailyTotals("1969-12-31", "1970-01-01")[0]?.completedFocusRounds, 1);
+    } finally { recovered.close(); }
+  } finally { store.close(); }
+}));
+
+test("retries WAL cleanup on reopening a migrated checkpoint after a reader releases the old pages", () => withDirectory((directory) => {
+  const path = join(directory, "pomodoro.sqlite");
+  const reader = new Database(path);
+  let migrated: SqliteStore | undefined;
+  try {
+    reader.pragma("journal_mode = WAL");
+    reader.exec(legacySchema);
+    const oldSnapshot = initialSnapshot();
+    oldSnapshot.status = "manual-paused";
+    oldSnapshot.automation.manualPauseLocked = true;
+    oldSnapshot.automation.inputPresence = "away";
+    reader.prepare("INSERT INTO timer_snapshot VALUES(1,3,0,?,?)").run(JSON.stringify(oldSnapshot), oldSnapshot.emittedAt);
+    reader.pragma("wal_checkpoint(TRUNCATE)");
+    assert.ok(readFileSync(path).includes("inputPresence"));
+    reader.exec("BEGIN");
+    reader.prepare("SELECT snapshot_json FROM timer_snapshot").get();
+    migrated = new SqliteStore(directory);
+    assert.deepEqual(migrated.loadSnapshot(), checkpointOf(oldSnapshot));
+    assert.ok(readFileSync(path).includes("inputPresence"), "a reader still holds the old page");
+    reader.exec("COMMIT");
+
+    // Leave a connection open, so SQLite's automatic last-close checkpoint cannot mask the retry.
+    const reopened = new SqliteStore(directory);
+    try {
+      assert.ok(!readFileSync(path).includes("inputPresence"));
+      assert.equal(readFileSync(path + "-wal").length, 0);
+      const restored = new TimerEngine(reopened, { now: () => 0, wallDate: () => new Date(0) });
+      assert.equal(restored.snapshot.automation.manualPauseLocked, true);
+      assert.equal(restored.snapshot.automation.inputPresence, "unknown");
+    } finally { reopened.close(); }
+  } finally { reader.close(); migrated?.close(); }
 }));
 
 test("rolls back the entire migration and backs up originals when a released checksum differs", () => withDirectory((directory) => {
@@ -84,10 +153,27 @@ test("rolls back the entire migration and backs up originals when a released che
   } finally { original.close(); }
 }));
 
+test("keeps an unreadable v3 checkpoint and rolls back v4 before offering recovery", () => withDirectory((directory) => {
+  const path = join(directory, "pomodoro.sqlite");
+  const previous = new Database(path);
+  previous.exec(legacySchema);
+  previous.prepare("INSERT INTO schema_migrations VALUES(?,?,?)").run(3, "electron-sqlite-v3-timer-state", "2026-10-22T00:00:00.000Z");
+  previous.prepare("INSERT INTO timer_snapshot VALUES(1,3,0,?,?)").run("{broken-json", "2026-10-22T00:00:00.000Z");
+  previous.close();
+  const recovery = captureRecovery(() => new SqliteStore(directory));
+  assert.ok(recovery.backupDirectory);
+  assert.match(recovery.message, /快照损坏/);
+  const original = new Database(path);
+  try {
+    assert.deepEqual(original.prepare("SELECT version FROM schema_migrations").all(), [{ version: 3 }]);
+    assert.deepEqual(original.prepare("SELECT snapshot_json FROM timer_snapshot").get(), { snapshot_json: "{broken-json" });
+  } finally { original.close(); }
+}));
+
 test("commits focus and snapshot atomically, deduplicates completion and changes revision only on committed inserts", () => withDirectory((directory) => {
   const store = new SqliteStore(directory);
   try {
-    const snapshot = initialSnapshot();
+    const snapshot = checkpointOf(initialSnapshot());
     store.saveSnapshot(snapshot);
     store.commitCompletedSessionAndSnapshot(session("focus-1-1"), snapshot);
     assert.equal(store.completedSessionsRevision, 1);
@@ -109,11 +195,11 @@ for (const [name, value] of [["invalid JSON", "{broken-json"], ["incompatible sc
   test(`preserves a snapshot with ${name}, closes its connection, and rebuilds only through explicit recovery`, () => withDirectory((directory) => {
     const store = new SqliteStore(directory);
     const database = new Database(join(directory, "pomodoro.sqlite"));
-    database.prepare("INSERT INTO timer_snapshot VALUES(1,3,0,?,?)").run(value, "2026-10-22T00:00:00.000Z");
+    database.prepare("INSERT INTO timer_snapshot VALUES(1,4,0,?,?)").run(value, "2026-10-22T00:00:00.000Z");
     database.close();
     const recovery = captureRecovery(() => store.loadSnapshot());
     assert.ok(recovery.backupDirectory);
-    assert.throws(() => store.saveSnapshot(initialSnapshot()), /连接已关闭/);
+    assert.throws(() => store.saveSnapshot(checkpointOf(initialSnapshot())), /连接已关闭/);
     const backup = backupContents(recovery.backupDirectory);
     assert.equal(readdirSync(directory).filter((file) => file.startsWith("database-archive-")).length, 0);
     const rebuilt = rebuildSqliteStore(recovery);
@@ -176,12 +262,12 @@ test("refuses rebuilding when the original data cannot be backed up", () => with
 
 test("prepares a single closed recovery result for failures in Main's remaining initialization", () => withDirectory((directory) => {
   const store = new SqliteStore(directory);
-  store.saveSnapshot(initialSnapshot());
+  store.saveSnapshot(checkpointOf(initialSnapshot()));
   const failure = new Error("timer initialization failed");
   const recovery = store.prepareRecovery(failure);
   assert.equal(recovery.cause, failure);
   assert.ok(recovery.backupDirectory);
   assert.equal(store.prepareRecovery(new Error("later failure")), recovery);
   assert.equal(readdirSync(directory).filter((file) => file.startsWith("database-backup-")).length, 1);
-  assert.throws(() => store.saveSnapshot(initialSnapshot()), /连接已关闭/);
+  assert.throws(() => store.saveSnapshot(checkpointOf(initialSnapshot())), /连接已关闭/);
 }));

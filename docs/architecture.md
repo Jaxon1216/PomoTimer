@@ -23,7 +23,7 @@ Main 在就绪及打开数据库之前取得单实例锁；同一 userData 的�
 
 React 只渲染快照、导航设置/统计视图、维护临时表单，并显示 Main 返回或广播的窗口模式。Preload 只暴露 `getSnapshot`、`command`、`getSettings`、`updateSettings`、`getCapabilities`、`getStatistics`、`getWindowMode`、`setWindowMode`、`subscribe`。Main 验证调用来源和 payload，广播经 Zod 校验的状态事件。
 
-`TimerEngine` 保存轮次、剩余时间、运行状态、手动暂停锁、输入 presence、设置生效边界，并在完整专注结束时调用 Store 写入一条记录。它使用单调时间派生剩余时长；Store 只保存状态快照、设置和完成记录。
+`TimerEngine` 使用单调时钟计算剩余时间，在内存中维护输入在场状态并向 Renderer 提供实时快照。Store 单独保存恢复计时所需的检查点、设置和已完成专注记录。重新打开应用时，Main 恢复轮次与手动暂停锁，在收到新的输入样本之前将在场状态设为 `unknown`。
 
 `regular | mini` 是 Main 管理的原生窗口状态，不属于 TimerEngine 或持久化设置。Main 在内存中分别记住每种模式的窗口 bounds，应用各自的最小内容尺寸，切换后返回当前模式并广播 `window.modeChanged`。Renderer 启动时并行读取模式与计时/设置数据；模式读取失败使用现有核心错误界面，不能猜测模式。原生尺寸变化只由 CSS 调整排布，React 不监听 resize 来切换迷你模式，也不为布局变化发送计时命令。
 
@@ -43,7 +43,7 @@ React 只渲染快照、导航设置/统计视图、维护临时表单，并显�
 
 ## 4. SQLite
 
-数据库文件为 `pomodoro.sqlite`。迁移保留原有 `schema_migrations`、`settings`、`timer_snapshot`、`completed_focus_sessions` 表；版本 1/2 保持既有校验和，版本 3 为计时快照状态扩展。完成专注的稳定业务 ID、下一轮快照和完成记录在一个 SQLite 事务中提交，避免重启后重复统计；SQLite 仅由 Main 访问。
+数据库文件为 `pomodoro.sqlite`。版本 4 迁移保留原有四张表和版本 1–3 的校验和，事务内将可读取的旧快照改写成计时检查点。检查点记录轮次、剩余时间、计时状态等恢复信息，系统挂起可以保留原因，输入监测的字段留在实时快照中。专注完成时，Store 在同一事务内写入完成记录和下一轮检查点，按稳定的轮次 ID 防止重启后重复计数。
 
 `better-sqlite3` 12.x 是当前 Electron 33 / Node 20 构建目标的实现选择。打包前由 electron-builder 重建原生模块；升级 Electron 或数据库驱动时必须重新验证构建。
 

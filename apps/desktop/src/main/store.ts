@@ -2,7 +2,8 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { defaultSettings } from "./timer.js";
-import { settingsSchema, timerSnapshotSchema, type Settings, type TimerSnapshot } from "../shared/contracts.js";
+import { settingsSchema, timerSnapshotSchema, type Settings } from "../shared/contracts.js";
+import { checkpointOf, timerCheckpointSchema, type TimerCheckpoint } from "./checkpoint.js";
 import type { CompletedSession, TimerStore } from "./timer.js";
 import { archiveDatabaseForRebuild, backupDatabaseFiles, StoreRecoveryError } from "./store-recovery.js";
 
@@ -11,7 +12,12 @@ export { StoreRecoveryError } from "./store-recovery.js";
 const initialMigrationChecksum = "phase0-initial-schema-v1";
 const compatibleMigrationChecksum = "electron-sqlite-v2-compatible";
 const migrationChecksum = "electron-sqlite-v3-timer-state";
-const snapshotSchemaVersion = 3;
+const privateCheckpointChecksum = "electron-sqlite-v4-private-checkpoint";
+const snapshotSchemaVersion = 4;
+
+function parseCheckpointJson(json: string): unknown {
+  try { return JSON.parse(json) as unknown; } catch { throw new Error("计时快照损坏"); }
+}
 
 // SqliteStore 是 Main 独占的数据库边界，初始化失败时先保留恢复材料。
 //
@@ -30,6 +36,7 @@ export class SqliteStore implements TimerStore {
       mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
       this.db = new Database(join(dataDirectory, "pomodoro.sqlite"));
       this.database.pragma("journal_mode = WAL");
+      this.database.pragma("secure_delete = ON");
       this.migrate();
     } catch (error) {
       this.failInitialization(error);
@@ -84,13 +91,12 @@ export class SqliteStore implements TimerStore {
     this.database.prepare("INSERT INTO settings(key,value_json,updated_at_utc) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at_utc=excluded.updated_at_utc").run("settings", JSON.stringify(settings), new Date().toISOString());
   }
 
-  loadSnapshot(): TimerSnapshot | undefined {
+  loadSnapshot(): TimerCheckpoint | undefined {
     try {
-      const row = this.database.prepare("SELECT snapshot_json FROM timer_snapshot WHERE singleton = 1").get() as { snapshot_json: string } | undefined;
+      const row = this.database.prepare("SELECT schema_version, snapshot_json FROM timer_snapshot WHERE singleton = 1").get() as { schema_version: number; snapshot_json: string } | undefined;
       if (!row) return undefined;
-      let parsed: unknown;
-      try { parsed = JSON.parse(row.snapshot_json); } catch { throw new Error("计时快照损坏"); }
-      const result = timerSnapshotSchema.safeParse(parsed);
+      if (row.schema_version !== snapshotSchemaVersion) throw new Error("计时快照版本不兼容");
+      const result = timerCheckpointSchema.safeParse(parseCheckpointJson(row.snapshot_json));
       if (!result.success) throw new Error("计时快照格式不兼容");
       return result.data;
     } catch (error) {
@@ -98,11 +104,11 @@ export class SqliteStore implements TimerStore {
     }
   }
 
-  saveSnapshot(snapshot: TimerSnapshot): void {
+  saveSnapshot(snapshot: TimerCheckpoint): void {
     this.upsertSnapshot(snapshot);
   }
 
-  commitCompletedSessionAndSnapshot(session: CompletedSession, snapshot: TimerSnapshot): void {
+  commitCompletedSessionAndSnapshot(session: CompletedSession, snapshot: TimerCheckpoint): void {
     const inserted = this.database.transaction(() => {
       const changes = this.insertCompletedSession(session);
       this.upsertSnapshot(snapshot);
@@ -125,16 +131,40 @@ export class SqliteStore implements TimerStore {
       const stateMigration = this.database.prepare("SELECT checksum FROM schema_migrations WHERE version = 3").get() as { checksum?: string } | undefined;
       if (!stateMigration) this.database.prepare("INSERT INTO schema_migrations(version,checksum,applied_at_utc) VALUES(3,?,?)").run(migrationChecksum, new Date().toISOString());
       else if (stateMigration.checksum !== migrationChecksum) throw new Error("数据库迁移校验失败");
+      const privacyMigration = this.database.prepare("SELECT checksum FROM schema_migrations WHERE version = 4").get() as { checksum: string } | undefined;
+      if (privacyMigration && privacyMigration.checksum !== privateCheckpointChecksum) throw new Error("数据库迁移校验失败");
+      this.convertLegacySnapshot();
+      if (!privacyMigration) this.database.prepare("INSERT INTO schema_migrations(version,checksum,applied_at_utc) VALUES(4,?,?)").run(privateCheckpointChecksum, new Date().toISOString());
     });
     migrate();
+    // A v4 marker can survive a crash or an older reader can still hold the old
+    // pages. Retry on every open; a busy checkpoint can safely wait for the next launch.
+    const busyTimeout = this.database.pragma("busy_timeout", { simple: true }) as number;
+    try {
+      this.database.pragma("busy_timeout = 0");
+      this.database.pragma("wal_checkpoint(TRUNCATE)");
+    } finally {
+      this.database.pragma(`busy_timeout = ${busyTimeout}`);
+    }
+  }
+
+  private convertLegacySnapshot(): void {
+    const row = this.database.prepare("SELECT schema_version, snapshot_json FROM timer_snapshot WHERE singleton = 1").get() as { schema_version: number; snapshot_json: string } | undefined;
+    if (!row || row.schema_version === snapshotSchemaVersion) return;
+    if (![1, 2, 3].includes(row.schema_version)) throw new Error("计时快照版本不兼容");
+    const legacy = timerSnapshotSchema.safeParse(parseCheckpointJson(row.snapshot_json));
+    if (!legacy.success) throw new Error("计时快照格式不兼容");
+    this.database.prepare("UPDATE timer_snapshot SET schema_version=?, snapshot_json=? WHERE singleton=1")
+      .run(snapshotSchemaVersion, JSON.stringify(checkpointOf(legacy.data)));
   }
 
   private insertCompletedSession(session: CompletedSession): number {
     return this.database.prepare("INSERT OR IGNORE INTO completed_focus_sessions(id,completed_at_utc,local_date,local_offset_minutes,cycle_number,focus_round_number,planned_duration_seconds,active_duration_seconds,mode) VALUES(@id,@completedAt,@localDate,@localOffsetMinutes,@cycleNumber,@focusRoundNumber,@plannedDurationSeconds,@activeDurationSeconds,@mode)").run(session).changes;
   }
 
-  private upsertSnapshot(snapshot: TimerSnapshot): void {
-    this.database.prepare("INSERT INTO timer_snapshot(singleton,schema_version,revision,snapshot_json,checkpointed_at_utc) VALUES(1,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET schema_version=excluded.schema_version,revision=excluded.revision,snapshot_json=excluded.snapshot_json,checkpointed_at_utc=excluded.checkpointed_at_utc").run(snapshotSchemaVersion, snapshot.revision, JSON.stringify(snapshot), new Date().toISOString());
+  private upsertSnapshot(snapshot: TimerCheckpoint): void {
+    const checkpoint = timerCheckpointSchema.parse(snapshot);
+    this.database.prepare("INSERT INTO timer_snapshot(singleton,schema_version,revision,snapshot_json,checkpointed_at_utc) VALUES(1,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET schema_version=excluded.schema_version,revision=excluded.revision,snapshot_json=excluded.snapshot_json,checkpointed_at_utc=excluded.checkpointed_at_utc").run(snapshotSchemaVersion, checkpoint.revision, JSON.stringify(checkpoint), new Date().toISOString());
   }
 }
 

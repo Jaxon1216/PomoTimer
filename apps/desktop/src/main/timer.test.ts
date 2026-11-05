@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { TimerCheckpoint } from "./checkpoint.js";
 import type { TimerSnapshot } from "../shared/contracts.js";
 import {
   defaultSettings,
@@ -26,14 +27,14 @@ class FakeClock implements TimerClock {
 }
 
 class FakeStore implements TimerStore {
-  snapshot?: TimerSnapshot;
+  snapshot?: TimerCheckpoint;
   settings = defaultSettings;
   sessions: CompletedSession[] = [];
   failCommit = false;
   failSnapshot = false;
   snapshotWrites = 0;
 
-  loadSnapshot(): TimerSnapshot | undefined {
+  loadSnapshot(): TimerCheckpoint | undefined {
     return this.snapshot;
   }
 
@@ -41,7 +42,7 @@ class FakeStore implements TimerStore {
     return this.settings;
   }
 
-  saveSnapshot(snapshot: TimerSnapshot): void {
+  saveSnapshot(snapshot: TimerCheckpoint): void {
     this.snapshotWrites += 1;
     if (this.failSnapshot) throw new Error("snapshot failed");
     this.snapshot = structuredClone(snapshot);
@@ -51,7 +52,7 @@ class FakeStore implements TimerStore {
     this.settings = structuredClone(settings);
   }
 
-  commitCompletedSessionAndSnapshot(session: CompletedSession, snapshot: TimerSnapshot): void {
+  commitCompletedSessionAndSnapshot(session: CompletedSession, snapshot: TimerCheckpoint): void {
     if (this.failCommit) throw new Error("commit failed");
     if (!this.sessions.some((item) => item.id === session.id)) this.sessions.push(structuredClone(session));
     this.snapshot = structuredClone(snapshot);
@@ -324,27 +325,60 @@ describe("TimerEngine", () => {
   });
 
   describe("snapshot checkpoints", () => {
-    it("skips unchanged idle and manually paused samples but saves presence and availability changes", () => {
+    it("shows fresh input changes in idle and manually paused rounds without writing checkpoints", () => {
       const { engine, clock, store } = create();
-      engine.inputSample(0, true);
+      const present = engine.inputSample(0, true);
       let writes = store.snapshotWrites;
       for (let sample = 0; sample < 3; sample += 1) {
         clock.advance(1_000);
-        engine.inputSample(0, true);
+        expect(engine.inputSample(0, true).revision).toBe(present.revision);
       }
       expect(store.snapshotWrites).toBe(writes);
-      engine.inputSample(40, true);
-      expect(store.snapshotWrites).toBe(writes + 1);
+      const away = engine.inputSample(40, true);
+      expect(away.automation.inputPresence).toBe("away");
+      expect(away.revision).toBeGreaterThan(present.revision);
+      expect(store.snapshotWrites).toBe(writes);
       engine.command("start");
       engine.command("pause");
       writes = store.snapshotWrites;
       clock.advance(1_000);
-      engine.inputSample(40, true);
+      const paused = engine.inputSample(40, true);
       expect(store.snapshotWrites).toBe(writes);
-      engine.inputSample(undefined, false);
-      expect(store.snapshotWrites).toBe(writes + 1);
-      engine.inputSample(undefined, false);
-      expect(store.snapshotWrites).toBe(writes + 1);
+      const failed = engine.inputSample(undefined, false);
+      expect(failed.automation.inputMonitoringAvailable).toBe(false);
+      expect(failed.revision).toBeGreaterThan(paused.revision);
+      expect(store.snapshotWrites).toBe(writes);
+      expect(engine.inputSample(undefined, false).revision).toBe(failed.revision);
+      expect(store.snapshotWrites).toBe(writes);
+    });
+
+    it("starts with unknown presence on restart and waits for a fresh sample to explain an automatic pause", () => {
+      const { engine, store, clock } = create();
+      engine.command("start");
+      const paused = engine.inputSample(40);
+      expect(paused.automation.pauseReason).toBe("input-away");
+      expect(store.snapshot).not.toHaveProperty("automation");
+
+      clock.advance(20_000);
+      const restored = new TimerEngine(store, clock);
+      expect(restored.snapshot.remainingMs).toBe(paused.remainingMs);
+      expect(restored.snapshot.status).toBe("auto-paused");
+      expect(restored.snapshot.automation).toMatchObject({ inputPresence: "unknown", pauseReason: "core-recovery" });
+      const pauseRevision = restored.snapshot.revision;
+      const fresh = restored.inputSample(40);
+      expect(fresh.automation.pauseReason).toBe("input-away");
+      expect(fresh.revision).toBeGreaterThan(pauseRevision);
+      expect(restored.inputSample(0).status).toBe("running");
+    });
+
+    it("keeps a system suspension reason after restart without replaying the last observed presence", () => {
+      const { engine, store, clock } = create();
+      engine.inputSample(0);
+      engine.command("start");
+      engine.systemSuspend();
+      const restored = new TimerEngine(store, clock);
+      expect(restored.snapshot.status).toBe("auto-paused");
+      expect(restored.snapshot.automation).toMatchObject({ inputPresence: "unknown", pauseReason: "system-suspend" });
     });
 
     it("continues saving running time every input sample", () => {
