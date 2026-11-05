@@ -26,6 +26,8 @@
 | [设置](./assets/screenshots/settings-dark.png) | 切换到深色主题，开启常驻顶部。 |
 | [统计](./assets/screenshots/stats-dark.png) | 独立测试数据中还没有完成的专注轮。 |
 
+开发版的[最小窗口截图](./assets/screenshots/drag-minimum-interrupted-break.png)来自 macOS 上的 Electron 测试窗口。常规窗口缩到 160×180 后，短休因输入暂停，窗口中仍可看到原因并直接点击“继续”。
+
 在仓库根目录运行 `npm run test:e2e`，可从 `apps/desktop/test-results/` 的对应测试输出中取同名文件。截图用例见[桌面 E2E](../tests/e2e/phase0.e2e.ts)。界面有可见变化时，只更新受影响的图并核对内容、平台和版本。这里仅收录用于描述产品的截图，完整运行日志和诊断图保留在测试输出目录。
 
 ## 安装包与预发布

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import {
   BarChart3,
   ChevronLeft,
@@ -41,8 +41,11 @@ function statusText(snapshot: TimerSnapshot): string {
 
   switch (snapshot.automation.pauseReason) {
     case "input-away":
-      return "离席 · 自动暂停";
+      return "无输入 · 自动暂停";
     case "break-condition": {
+      if (snapshot.remainingMs < snapshot.round.totalDurationMs && snapshot.automation.inputPresence === "present") {
+        return "有输入 · 休息暂停";
+      }
       const condition = snapshot.round.breakMode === "desk" ? "等待无输入" : "等待离席";
       const action = snapshot.remainingMs === snapshot.round.totalDurationMs ? "开始" : "继续";
       return `${condition} · 将自动${action}`;
@@ -70,7 +73,7 @@ function IconButton({
   disabled = false,
 }: {
   label: string;
-  children: ReactElement;
+  children: ReactNode;
   onClick: () => void;
   className?: string;
   disabled?: boolean;
@@ -92,20 +95,22 @@ function IconButton({
 function primaryCommand(snapshot: TimerSnapshot): {
   command: TimerCommand;
   label: string;
+  caption: string;
   icon: ReactElement;
 } {
   if (snapshot.status === "running") {
-    return { command: "pause", label: "暂停计时", icon: <Pause size={16} /> };
+    return { command: "pause", label: "暂停计时", caption: "暂停", icon: <Pause size={16} /> };
   }
   const waitingBreak = snapshot.round.kind !== "focus"
+    && snapshot.remainingMs === snapshot.round.totalDurationMs
     && (snapshot.status === "idle" || (snapshot.status === "auto-paused" && snapshot.automation.pauseReason === "break-condition"));
   if (waitingBreak) {
-    return { command: snapshot.status === "idle" ? "start" : "resume", label: "手动开始休息", icon: <Play size={16} /> };
+    return { command: snapshot.status === "idle" ? "start" : "resume", label: "手动开始休息", caption: "开始", icon: <Play size={16} /> };
   }
   if (snapshot.status === "idle") {
-    return { command: "start", label: "开始计时", icon: <Play size={16} /> };
+    return { command: "start", label: "开始计时", caption: "开始", icon: <Play size={16} /> };
   }
-  return { command: "resume", label: "继续计时", icon: <Play size={16} /> };
+  return { command: "resume", label: "继续计时", caption: "继续", icon: <Play size={16} /> };
 }
 
 function TimerView({
@@ -214,11 +219,20 @@ function TimerView({
       </header>
 
       <section className="timerStage" aria-labelledby="round-title">
-        <div className="roundMeta">
-          <h1 id="round-title">{labels[snapshot.round.kind]}</h1>
-          <span className="breakMode">
-            {snapshot.round.kind === "focus" ? "系统输入检测" : snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}
-          </span>
+        <div className="timerDetails">
+          <div className="roundMeta">
+            <h1 id="round-title">{labels[snapshot.round.kind]}</h1>
+            <span className="breakMode">
+              {snapshot.round.kind === "focus" ? "系统输入检测" : snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}
+            </span>
+          </div>
+          <div className="timerStatus" aria-live="polite">
+            <div className={`statePill state-${snapshot.status}`} title={statusText(snapshot)}>
+              <span className="stateDot" aria-hidden="true" />
+              <span>{statusText(snapshot)}</span>
+            </div>
+            <p className="monitorStatus" data-available={snapshot.automation.inputMonitoringAvailable}>{monitorStatus}</p>
+          </div>
         </div>
         <div className="dialSlot">
           <div
@@ -246,17 +260,10 @@ function TimerView({
           </div>
         </div>
 
-        <div className="timerStatus" aria-live="polite">
-          <div className={`statePill state-${snapshot.status}`} title={statusText(snapshot)}>
-            <span className="stateDot" aria-hidden="true" />
-            <span>{statusText(snapshot)}</span>
-          </div>
-          <p className="monitorStatus">{monitorStatus}</p>
-        </div>
-
         <div className="timerControls" aria-label="计时控制">
           <IconButton label={action.label} onClick={() => onCommand(action.command)} className="primary">
             {action.icon}
+            <span className="actionCaption">{action.caption}</span>
           </IconButton>
           <IconButton label="跳到下一轮" onClick={() => onCommand("next")}>
             <SkipForward size={16} />

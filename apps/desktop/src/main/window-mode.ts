@@ -22,9 +22,11 @@ interface NativeWindow {
   setBounds(bounds: WindowRectangle, animate?: boolean): void;
 }
 
+const minimumContentSize: WindowSize = { width: 160, height: 180 };
+
 export const windowModeLayouts: Readonly<Record<WindowMode, { defaultSize: WindowSize; minimumSize: WindowSize }>> = {
-  regular: { defaultSize: { width: 360, height: 478 }, minimumSize: { width: 320, height: 300 } },
-  mini: { defaultSize: { width: 220, height: 240 }, minimumSize: { width: 220, height: 240 } },
+  regular: { defaultSize: { width: 360, height: 478 }, minimumSize: minimumContentSize },
+  mini: { defaultSize: { width: 220, height: 240 }, minimumSize: minimumContentSize },
 };
 
 // WindowModeController 管理单个原生窗口的形态和会话内布局记忆。

@@ -41,25 +41,6 @@ const settings = {
   notificationsEnabled: true,
 };
 
-function snapshot(durationMs) {
-  return {
-    revision: 0,
-    emittedAt: "2026-10-19T07:00:00.000Z",
-    round: { kind: "focus", cycleNumber: 1, positionInCycle: 1, focusRoundNumber: 1, breakMode: null, totalDurationMs: durationMs },
-    status: "idle",
-    remainingMs: durationMs,
-    automation: {
-      activePresenceSource: "input",
-      inputPresence: "unknown",
-      cameraPresence: "unknown",
-      inputMonitoringAvailable: true,
-      cameraMonitoringAvailable: false,
-      manualPauseLocked: false,
-      pauseReason: "none",
-    },
-  };
-}
-
 async function settle(page) {
   await page.evaluate(async () => {
     await document.fonts.ready;
@@ -100,10 +81,13 @@ try {
   const context = await browser.newContext();
   await context.addInitScript((initialSettings) => {
     Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    let windowMode = "regular";
+    const listeners = new Set();
     const makeSnapshot = (durationMs) => ({
       revision: 0,
       emittedAt: "2026-10-19T07:00:00.000Z",
       round: { kind: "focus", cycleNumber: 1, positionInCycle: 1, focusRoundNumber: 1, breakMode: null, totalDurationMs: durationMs },
+      activeCycleRounds: initialSettings.focusRoundsPerCycle,
       status: "idle",
       remainingMs: durationMs,
       automation: {
@@ -120,7 +104,18 @@ try {
       updateSettings: async (patch) => ({ ...initialSettings, ...patch }),
       getCapabilities: async () => ({ inputMonitoring: true, cameraPresence: false, standingFocus: false }),
       getStatistics: async () => ({ generatedAt: "2026-10-19T07:00:00.000Z", today: { localDate: "2026-10-19", completedFocusMinutes: 0, completedFocusRounds: 0 }, week: [], heatmap: [] }),
-      subscribe: () => () => undefined,
+      getWindowMode: async () => windowMode,
+      setWindowMode: async (mode) => {
+        if (mode !== windowMode) {
+          windowMode = mode;
+          for (const listener of listeners) listener({ type: "window.modeChanged", mode });
+        }
+        return windowMode;
+      },
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
     };
   }, settings);
   const page = await context.newPage();
@@ -129,8 +124,7 @@ try {
   for (const [width, height] of [[160, 180], [200, 240], [240, 300], [360, 180], [160, 478], [360, 478], [300, 390], [301, 390], [301, 391], [360, 391]]) {
     await page.setViewportSize({ width, height });
     await page.goto(renderer);
-    if (!(await page.getByText("30:00").count())) console.log(await page.locator("body").innerHTML());
-    await page.getByText("30:00").waitFor();
+    await page.getByText("30:00", { exact: true }).waitFor();
     await settle(page);
     const result = await geometry(page);
     assert.equal(result.width, result.height, `${width}x${height}: dial should remain round`);
@@ -141,18 +135,21 @@ try {
 
   await page.setViewportSize({ width: 160, height: 180 });
   await page.goto(`${renderer}?duration=7200000`);
-  await page.getByText("120:00").waitFor();
+  await page.getByText("120:00", { exact: true }).waitFor();
   await settle(page);
   const longDuration = await geometry(page);
   assert.equal(longDuration.fits, true, "120:00 must stay inside the ring");
   await page.screenshot({ path: join(output, "timer-120-minutes.png") });
 
-  await page.getByRole("button", { name: "打开设置" }).click();
+  await page.getByRole("button", { name: "更多操作" }).click();
+  await page.getByRole("menuitem", { name: "打开设置" }).click();
   await page.getByRole("heading", { name: "设置" }).waitFor();
   await page.screenshot({ path: join(output, "settings-160x180.png") });
-  await page.getByRole("button", { name: /计时器/ }).click();
-  await page.getByRole("button", { name: "打开统计" }).click();
+  await page.getByRole("button", { name: "返回计时器" }).click();
+  await page.getByRole("button", { name: "更多操作" }).click();
+  await page.getByRole("menuitem", { name: "打开统计" }).click();
   await page.getByRole("heading", { name: "统计" }).waitFor();
+  await page.getByText("今日专注", { exact: true }).waitFor();
   await page.screenshot({ path: join(output, "stats-160x180.png") });
   console.log(`Chromium layout validation passed; screenshots: ${output}`);
   await context.close();

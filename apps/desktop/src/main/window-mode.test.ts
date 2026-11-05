@@ -30,19 +30,19 @@ class FakeWindow {
 const desktop = { x: 0, y: 0, width: 1920, height: 1080 };
 
 describe("WindowModeController", () => {
-  it("initializes regular mode with content-based minimums on a native Windows frame", () => {
+  it("keeps distinct starting sizes and the same content minimum on a native Windows frame", () => {
     const window = new FakeWindow(360, 478, { width: 16, height: 39 });
     const modes = new WindowModeController(() => desktop);
 
     modes.initialize(window);
 
     expect(modes.mode).toBe("regular");
-    expect(window.setMinimumSize).toHaveBeenLastCalledWith(336, 339);
+    expect(window.setMinimumSize).toHaveBeenLastCalledWith(176, 219);
     expect(window.getContentBounds()).toMatchObject({ width: 360, height: 478 });
     expect(window.setBounds).toHaveBeenLastCalledWith({ x: 100, y: 100, width: 376, height: 517 }, false);
 
     modes.setMode(window, "mini");
-    expect(window.setMinimumSize).toHaveBeenLastCalledWith(236, 279);
+    expect(window.setMinimumSize).toHaveBeenLastCalledWith(176, 219);
     expect(window.getContentBounds()).toMatchObject({ width: 220, height: 240 });
   });
 
@@ -50,16 +50,16 @@ describe("WindowModeController", () => {
     const window = new FakeWindow();
     const modes = new WindowModeController(() => desktop);
     modes.initialize(window);
-    window.bounds = { x: 200, y: 150, width: 480, height: 560 };
+    window.bounds = { x: 200, y: 150, width: 175, height: 200 };
 
     expect(modes.setMode(window, "mini")).toBe("mini");
     expect(window.bounds).toEqual({ x: 200, y: 150, width: 220, height: 240 });
-    window.bounds = { x: 1300, y: 600, width: 240, height: 270 };
+    window.bounds = { x: 1300, y: 600, width: 160, height: 180 };
 
     expect(modes.setMode(window, "regular")).toBe("regular");
-    expect(window.bounds).toEqual({ x: 200, y: 150, width: 480, height: 560 });
+    expect(window.bounds).toEqual({ x: 200, y: 150, width: 175, height: 200 });
     modes.setMode(window, "mini");
-    expect(window.bounds).toEqual({ x: 1300, y: 600, width: 240, height: 270 });
+    expect(window.bounds).toEqual({ x: 1300, y: 600, width: 160, height: 180 });
   });
 
   it("clamps a restored regular window above the screen's lower edge without animation", () => {
@@ -88,7 +88,7 @@ describe("WindowModeController", () => {
     modes.setMode(window, "regular");
 
     expect(window.bounds).toEqual({ x: -1280, y: 40, width: 1280, height: 760 });
-    expect(window.setMinimumSize).toHaveBeenLastCalledWith(320, 300);
+    expect(window.setMinimumSize).toHaveBeenLastCalledWith(160, 180);
   });
 
   it("keeps native resizing independent from mode selection and avoids repeated bounds writes", () => {
@@ -97,7 +97,7 @@ describe("WindowModeController", () => {
     modes.initialize(window);
     window.setBounds.mockClear();
     window.setMinimumSize.mockClear();
-    window.bounds = { x: 100, y: 100, width: 320, height: 300 };
+    window.bounds = { x: 100, y: 100, width: 160, height: 180 };
 
     expect(modes.mode).toBe("regular");
     expect(modes.setMode(window, "regular")).toBe("regular");
@@ -122,7 +122,7 @@ describe("WindowModeController", () => {
 
     expect(modes.mode).toBe("mini");
     expect(reopened.bounds).toEqual(original.bounds);
-    expect(reopened.setMinimumSize).toHaveBeenLastCalledWith(220, 240);
+    expect(reopened.setMinimumSize).toHaveBeenLastCalledWith(160, 180);
   });
 
   it("does not command or persist TimerEngine when switching modes or resizing", () => {

@@ -25,7 +25,7 @@ React 只渲染快照、导航设置/统计视图、维护临时表单，并显�
 
 `TimerEngine` 使用单调时钟计算剩余时间，在内存中维护输入在场状态并向 Renderer 提供实时快照。Store 单独保存恢复计时所需的检查点、设置和已完成专注记录。重新打开应用时，Main 恢复轮次与手动暂停锁，在收到新的输入样本之前将在场状态设为 `unknown`。
 
-`regular | mini` 是 Main 管理的原生窗口状态，不属于 TimerEngine 或持久化设置。Main 在内存中分别记住每种模式的窗口 bounds，应用各自的最小内容尺寸，切换后返回当前模式并广播 `window.modeChanged`。Renderer 启动时并行读取模式与计时/设置数据；模式读取失败使用现有核心错误界面，不能猜测模式。原生尺寸变化只由 CSS 调整排布，React 不监听 resize 来切换迷你模式，也不为布局变化发送计时命令。
+`regular | mini` 是 Main 管理的原生窗口状态。Main 在内存中分别记住两种模式的 bounds，显式切换时返回当前模式并广播 `window.modeChanged`。Renderer 启动时并行读取模式、计时与设置，模式读取失败时使用现有核心错误界面。用户拖动窗口边缘时，Renderer 的 CSS 根据内容区调整布局。拖动后的常规窗口也能呈现紧凑排版，这条路径只涉及展示层。
 
 ## 3. 平台集成
 
@@ -37,7 +37,7 @@ React 只渲染快照、导航设置/统计视图、维护临时表单，并显�
 - 关闭窗口在 Windows 上隐藏到托盘，退出菜单设置退出标记后真正退出；macOS 遵循应用生命周期。
 - `contextIsolation`、sandbox、CSP、禁止导航和外部链接 allowlist 必须保持。
 - macOS 窗口使用 `hiddenInset` 时，Main 仅配置原生 traffic-light 位置；Renderer 根据浏览器平台标记预留受控标题栏安全区。Windows 使用默认原生标题栏，不继承 macOS 留白，最小尺寸换算仍以内容区域为准。
-- 首次启动使用常规模式 360×478；常规最小内容区域为 320×300，首次进入迷你模式和迷你最小区域均为 220×240。显式切回常规恢复之前的常规 bounds；模式和 bounds 仅在本次进程内保留，不写入 SQLite。常规模式保持竖向圆环构图、状态与操作同行，CSS 根据可用空间连续调整圆环、字号与留白；迷你模式保持状态与操作上下排列，拖动不改变构图或模式。
+- 常规窗口初始内容区域为 360×478，首次显式进入迷你模式时为 220×240。两种模式共用 160×180 的原生最小内容区域。切回常规时恢复本次进程中记住的常规 bounds。
 - 托盘资源与应用图标分离：macOS 从 `trayTemplate.png` 和 `trayTemplate@2x.png` 创建透明黑色 template `NativeImage` 并设置 tooltip；Windows 只加载 `.ico`，Dock 继续使用 `.icns`。
 - 原生验收使用独立临时 `userData`，由 Main 的真实 PID、`app.getPath("userData")` 和当前 Tray 的 `getBounds()` 确认实例。只有显式设置 `POMODORO_DIAGNOSTICS=1` 时，Node inspector 才可通过 Main 内部的只读 symbol 查询窗口、Tray 及其实际图像倍率；该能力不进入 preload 或 IPC。其他常驻应用无需退出。
 

@@ -213,13 +213,14 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "专注" });
 
-    vi.stubGlobal("innerWidth", 320);
-    vi.stubGlobal("innerHeight", 300);
+    vi.stubGlobal("innerWidth", 160);
+    vi.stubGlobal("innerHeight", 180);
     fireEvent.resize(window);
     expect(screen.getByRole("main")).not.toHaveClass("mini");
     expect(screen.getByRole("main")).toHaveAttribute("data-window-mode", "regular");
     expect(screen.getByText("120:00")).toBeInTheDocument();
     expect(screen.getByText("手动暂停 · 点击继续")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续计时" })).toHaveTextContent("继续");
 
     vi.stubGlobal("innerWidth", 360);
     vi.stubGlobal("innerHeight", 478);
@@ -370,6 +371,31 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "暂停计时" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "手动开始休息" })).not.toBeInTheDocument();
     expect(window.pomodoro.command).not.toHaveBeenCalled();
+  });
+
+  it("offers continue when input interrupts a break already in progress", async () => {
+    const paused = { ...waitingBreakSnapshot, remainingMs: 210_000 };
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue(paused);
+    window.pomodoro.command = vi.fn().mockResolvedValue({ ...paused, status: "running" });
+    render(<App />);
+
+    expect(await screen.findByText("有输入 · 休息暂停")).toBeInTheDocument();
+    const resume = screen.getByRole("button", { name: "继续计时" });
+    expect(resume).toHaveTextContent("继续");
+    fireEvent.click(resume);
+    expect(window.pomodoro.command).toHaveBeenCalledWith("resume");
+    expect(await screen.findByRole("button", { name: "暂停计时" })).toHaveTextContent("暂停");
+  });
+
+  it("attributes automatic focus pauses to the observed input signal", async () => {
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({
+      ...snapshot,
+      status: "auto-paused",
+      automation: { ...snapshot.automation, inputPresence: "away", pauseReason: "input-away" },
+    } satisfies TimerSnapshot);
+    render(<App />);
+    expect(await screen.findByText("无输入 · 自动暂停")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续计时" })).toHaveTextContent("继续");
   });
 
   it("keeps manually paused breaks locked until the user continues", async () => {

@@ -18,7 +18,7 @@ subscribe(listener: (event: CoreEvent) => void): () => void
 
 每个参数和返回值都经过共享 Zod schema。Main 仅接受主窗口 sender；Preload 不暴露通用 IPC。
 
-`WindowMode = "regular" | "mini"`，只接受这两个枚举值。窗口模式由 Main 持有；`setWindowMode` 应用该模式对应的内容最小尺寸和已记忆的 bounds，返回最终模式并广播 `window.modeChanged`。初始常规内容区域为 360×478、最小 320×300；迷你首次进入与最小内容区域为 220×240。切回常规恢复之前的常规 bounds，各模式 bounds 仅存在于 Main 内存中。Renderer 不接触原生窗口坐标，也不通过 resize 自动请求迷你模式；这些操作不调用 TimerEngine、不改变快照且不写数据库。
+`WindowMode = "regular" | "mini"`，只接受这两个枚举值。Main 持有原生窗口模式。`setWindowMode` 恢复目标模式的位置与尺寸，返回最终模式并广播 `window.modeChanged`。初始常规内容区域为 360×478，首次进入迷你模式时为 220×240，原生最小内容区域均为 160×180。各模式的 bounds 仅存在于 Main 内存中。直接拖小常规窗口时 `getWindowMode()` 仍返回 `regular`，紧凑排版由 Renderer 随内容区尺寸呈现。拖动无需调用 `setWindowMode`，也不触发计时命令或数据库写入。
 
 ## 2. TimerSnapshot
 
