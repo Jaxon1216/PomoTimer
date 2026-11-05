@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { PomodoroApi, TimerSnapshot } from "../../apps/desktop/src/shared/contracts";
-import { assertWindowsTimerHitTests } from "./windows-hit-test";
+import { assertWindowsTimerHitTests, buildWindowsHitTest } from "./windows-hit-test";
 
 const workspaceRoot = process.cwd();
 const desktopDirectory = existsSync(join(workspaceRoot, "apps/desktop/out/main/index.js"))
@@ -46,6 +46,13 @@ const test = baseTest.extend<{ launchApplication: LaunchApplication }>({
       await Promise.all([...applications].map((application) => application.close()));
     }
   },
+});
+
+let windowsHitTestExecutable: string;
+test.beforeAll("build the Windows native hit-test probe", async ({}, testInfo) => {
+  if (process.platform !== "win32") return;
+  testInfo.setTimeout(65_000);
+  windowsHitTestExecutable = await buildWindowsHitTest(testInfo.project.outputDir);
 });
 
 async function inspectRuntime(application: ElectronApplication): Promise<DesktopRuntime> {
@@ -335,7 +342,7 @@ test("limits tall windows while keeping short and wide timer layouts available",
   const start = window.getByRole("button", { name: "开始计时" });
   await expect(start).toHaveText("");
   const box = await start.boundingBox();
-  if (process.platform === "win32") await assertWindowsTimerHitTests(app, window);
+  if (process.platform === "win32") await assertWindowsTimerHitTests(windowsHitTestExecutable, app, window);
   expect(box?.width).toBe(32);
   expect(box?.height).toBe(32);
   await expect(window.getByRole("button", { name: "打开统计" })).toBeInViewport();
