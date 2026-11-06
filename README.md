@@ -12,6 +12,8 @@
 
 下方下载目前仍是 **v0.1.0-beta.2（预发布）旧包**，未包含本次签名修复，也未完成下载与首次打开验收。新的免费分发构建尚未发布，不能用新构建的验证结果保证旧包可用。
 
+如需测试本次修复，可下载 [Intel x64 预览包](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745/artifacts/13487899158)或 [Apple Silicon ARM64 预览包](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745/artifacts/13488491818)。这是提交 `5449d66` 的 CI 产物，需要登录 GitHub，保留 14 天；先解压 ZIP，再按下文安装其中的 DMG。文件名仍带 `beta.2`，但内容与下方旧 Release 不同。两个架构均通过签名与安装包自动化检查，人工首次打开状态见[安装分发验证](docs/roadmap.md#安装分发验证)。
+
 | 平台 | 安装包 |
 | --- | --- |
 | Windows x64 | [EXE 安装向导](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.2/Pomodot-0.1.0-beta.2-windows-x64-setup.exe) |
@@ -25,9 +27,13 @@
 
 ### macOS 首次打开
 
-Intel Mac 选择 **x64**，M 系列芯片选择 **ARM64**；可在苹果菜单的“关于本机”中确认。打开 DMG 后，先将应用拖入 Applications，再从 Applications 启动。
+1. 在苹果菜单的“关于本机”中确认芯片：Intel Mac 选择 **x64**，M 系列芯片选择 **ARM64**。
+2. 下载本仓库提供的安装包；Release 包可与同次发布的 `SHA256SUMS` 核对。预览 artifact 需先解压 ZIP；打开 DMG，将应用拖入 Applications。
+3. 从 Applications 打开 **Pomodoro Timer**。如果提示“未打开”“无法验证开发者”或“Apple 无法验证是否包含恶意软件”，先点“完成”或取消。
+4. 进入“系统设置 → 隐私与安全性”，向下找到“已阻止 Pomodoro Timer”旁的“仍要打开”。在后续确认中再次选择“仍要打开”；系统如要求认证，请在电脑上使用 Touch ID 或管理员密码。
+5. 应用打开后，后续从 Applications 正常启动即可。更换构建或升级后，系统可能重新要求批准。
 
-如果提示“无法验证开发者”或“Apple 无法检查是否包含恶意软件”，先确认文件来自本仓库 Release 且校验值一致，再按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)进入“系统设置 → 隐私与安全性 → 仍要打开”，仅为这个应用添加例外。macOS 15 Sequoia 起，[Control-click 打开的旧方法不再适用](https://developer.apple.com/news/?id=saqachfa)。受组织管理的电脑可能不允许添加例外。
+上述步骤仅为已确认来源的这个应用添加例外，参见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。macOS 15 Sequoia 起，[Control-click 打开的旧方法不再适用](https://developer.apple.com/news/?id=saqachfa)。受组织管理的电脑可能不允许添加例外。
 
 如果提示“已损坏”“将损坏你的电脑”，或根本没有“仍要打开”，请记录完整提示、macOS 版本和下载的文件名后反馈；不要直接按未知开发者问题处理，也不要全局关闭系统安全保护。**现有 beta.2 尚未通过完整下载与首次打开验收，不能保证手动允许后就能运行。**
 
