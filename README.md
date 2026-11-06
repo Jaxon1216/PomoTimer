@@ -8,7 +8,9 @@
 
 ## 下载与安装
 
-当前公开版本为 **v0.1.0-beta.2（预发布）**，供体验与反馈使用，尚未完成全部真实设备验收。
+安装包是普通用户的使用入口，**不需要安装 Node.js、运行 npm 或自行编译**。macOS 免费分发包可能需要在首次打开时手动允许，具体方法与限制见下文。
+
+下方下载目前仍是 **v0.1.0-beta.2（预发布）旧包**，未包含本次签名修复，也未完成下载与首次打开验收。新的免费分发构建尚未发布，不能用新构建的验证结果保证旧包可用。
 
 | 平台 | 安装包 |
 | --- | --- |
@@ -19,7 +21,17 @@
 - macOS：打开与芯片类型匹配的 DMG，将应用拖入 Applications。
 - Windows：运行 EXE 安装向导，可选择安装目录。
 - 下载后可与同一发布中的 [SHA256SUMS](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.2/SHA256SUMS) 核对文件校验值。
-- 当前安装包**未使用开发者证书签名，macOS 也未公证**。系统可能阻止打开或提示未知发布者；请先核对来源与校验值，不要全局关闭系统安全保护。
+- 当前公开安装包**未使用开发者证书签名，macOS 也未公证**。系统可能阻止打开或提示未知发布者。
+
+### macOS 首次打开
+
+Intel Mac 选择 **x64**，M 系列芯片选择 **ARM64**；可在苹果菜单的“关于本机”中确认。打开 DMG 后，先将应用拖入 Applications，再从 Applications 启动。
+
+如果提示“无法验证开发者”或“Apple 无法检查是否包含恶意软件”，先确认文件来自本仓库 Release 且校验值一致，再按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)进入“系统设置 → 隐私与安全性 → 仍要打开”，仅为这个应用添加例外。macOS 15 Sequoia 起，[Control-click 打开的旧方法不再适用](https://developer.apple.com/news/?id=saqachfa)。受组织管理的电脑可能不允许添加例外。
+
+如果提示“已损坏”“将损坏你的电脑”，或根本没有“仍要打开”，请记录完整提示、macOS 版本和下载的文件名后反馈；不要直接按未知开发者问题处理，也不要全局关闭系统安全保护。**现有 beta.2 尚未通过完整下载与首次打开验收，不能保证手动允许后就能运行。**
+
+当前源码为下一版 macOS 安装包配置了免费的 **ad hoc 签名**，用于检查代码完整性，并保留 hardened runtime。它不提供 Apple 认可的开发者身份，也不等于公证，因此仍可能需要上述手动批准。此改动**尚未发布到上方 beta.2 下载包**；验收状态见[安装分发验证](docs/roadmap.md#安装分发验证)。
 
 ### 版本与已知限制
 
@@ -90,11 +102,12 @@ npm run dev
 | `npm run test:store` | 重建原生依赖，使用 Electron 运行时验证真实 SQLite |
 | `npm run test:e2e` | 构建、重建原生依赖并运行 Playwright Electron E2E |
 | `npm run build` | 构建应用代码 |
-| `npm run package` | 使用 electron-builder 生成当前平台安装包 |
+| `npm run package` | 先构建，再使用 electron-builder 生成当前平台安装包 |
+| `npm run test:packaging` | 仅 macOS；打包后对真实 `.app` 验签，并验证篡改资源与原生模块会被拒绝 |
 
-安装包输出在 `apps/desktop/dist/`。打包后，可在对应系统运行 `node scripts/smoke-packaged.mjs` 检查打包应用；开发启动与原生回归说明见[开发验证文档](docs/README.md#本地原生回归)。
+安装包输出在 `apps/desktop/dist/`。打包后，可在对应系统运行 `node scripts/smoke-packaged.mjs` 检查打包应用。macOS 另提供签名和 DMG 检查，见[安装包与预发布](docs/README.md#安装包与预发布)；开发启动与原生回归说明见[开发验证文档](docs/README.md#本地原生回归)。
 
-CI 在 macOS 和 Windows 上运行 lint、类型检查、单元测试、原生数据库测试和 Electron E2E。发布工作流额外构建 Windows x64、macOS ARM64 和 macOS x64 安装包，但不替代人工验收。
+CI 在 macOS 和 Windows 上运行 lint、类型检查、单元测试、原生数据库测试和 Electron E2E。两个 macOS runner 分别构建 ARM64 与 x64 DMG，再运行真实应用的签名回归与 DMG 检查；Windows 不运行这些 macOS 签名测试。发布工作流另包含 Windows x64 安装包构建与启动检查。自动化不代替经浏览器下载、Finder 首次打开及系统批准的人工验收。
 
 ## 架构与目录
 

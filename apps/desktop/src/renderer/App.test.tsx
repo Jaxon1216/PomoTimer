@@ -569,6 +569,7 @@ describe("App", () => {
 
     render(<App />);
     await screen.findByRole("heading", { name: "专注" });
+    await waitFor(() => expect(listener).toBeDefined());
     expect(document.documentElement).not.toHaveClass("dark");
 
     matches = true;
