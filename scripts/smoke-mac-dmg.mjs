@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { verifyMacSignature } from "./verify-mac-signature.mjs";
-import { smokePackaged } from "./smoke-packaged.mjs";
 
 const execFileAsync = promisify(execFile);
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 assert.equal(process.platform, "darwin", "DMG smoke tests require macOS.");
 assert.equal(process.argv.length, 3, "Usage: node scripts/smoke-mac-dmg.mjs <dmg-path>");
 const dmgPath = resolve(process.argv[2]);
@@ -22,6 +23,47 @@ process.once("SIGTERM", interrupt);
 let mountAttempted = false;
 let failure;
 let evidence;
+
+async function runPackagedSmoke(executablePath) {
+  controller.signal.throwIfAborted();
+  await new Promise((resolveSmoke, rejectSmoke) => {
+    const child = spawn(process.execPath, [join(root, "scripts/smoke-packaged.mjs")], {
+      cwd: root,
+      env: { ...process.env, POMODORO_SMOKE_EXECUTABLE: executablePath },
+      detached: true,
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    let failure;
+    let forceTimer;
+    let stopTimer;
+    const stop = (reason) => {
+      if (failure) return;
+      failure = reason;
+      // Playwright 的 SIGINT 会直接退出 Node；独立进程组改收 SIGTERM，以完成自身 finally。
+      child.kill("SIGTERM");
+      forceTimer = setTimeout(() => {
+        try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
+          if (error.code !== "ESRCH") failure = new AggregateError([failure, error], "Could not stop the smoke worker.");
+        }
+      }, 45_000);
+      stopTimer = setTimeout(() => finish(new Error("Smoke worker did not close after termination.")), 50_000);
+    };
+    const abort = () => stop(controller.signal.reason);
+    const timeout = setTimeout(() => stop(new Error("Packaged smoke test timed out.")), 120_000);
+    const finish = (error) => {
+      clearTimeout(timeout);
+      clearTimeout(forceTimer);
+      clearTimeout(stopTimer);
+      controller.signal.removeEventListener("abort", abort);
+      if (error) rejectSmoke(error);
+      else resolveSmoke();
+    };
+    child.once("error", finish);
+    child.once("close", (code, signal) => finish(failure ?? (code === 0 ? undefined : new Error(`Packaged smoke worker exited with ${signal ?? code}.`))));
+    controller.signal.addEventListener("abort", abort, { once: true });
+    if (controller.signal.aborted) abort();
+  });
+}
 
 async function isTestVolumeMounted() {
   const { stdout } = await execFileAsync("/usr/bin/hdiutil", ["info", "-plist"], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 });
@@ -43,7 +85,7 @@ try {
   await execFileAsync("/usr/bin/ditto", ["--rsrc", "--extattr", "--acl", "--qtn", join(mountPath, apps[0].name), installedApp], { timeout: 60_000, signal: controller.signal });
   const signature = await verifyMacSignature(installedApp);
   controller.signal.throwIfAborted();
-  await smokePackaged({ executablePath: signature.executablePath, signal: controller.signal });
+  await runPackagedSmoke(signature.executablePath);
   evidence = {
     kind: "mac-dmg-smoke",
     dmgPath,
