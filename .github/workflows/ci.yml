@@ -4,15 +4,42 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.check_name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # Match the release runner's Visual Studio 2022 toolchain for Electron's native SQLite module.
-        os: [macos-latest, windows-2022]
+        include:
+          # Match the release toolchains for Electron's native SQLite module and Mac signing.
+          - runner: windows-2022
+            check_name: windows-2022
+            platform: windows
+            arch: x64
+          - runner: macos-15
+            check_name: macos-latest
+            platform: mac
+            arch: arm64
+            builder_args: --mac dmg --arm64
+          - runner: macos-15-intel
+            check_name: macos-15-intel
+            platform: mac
+            arch: x64
+            builder_args: --mac dmg --x64
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,9 +52,32 @@ jobs:
       - run: npm run test
       - run: npm run test:store
       - run: npm run test:e2e
+      - name: Build Mac preview installer
+        if: matrix.platform == 'mac'
+        run: npm exec --workspace=@pomodoro/desktop -- electron-builder ${{ matrix.builder_args }} --publish never
+        env:
+          # The custom hook uses free ad hoc signing without certificates or signing credentials.
+          # Allow it on read-only pull_request jobs; never use pull_request_target for these builds.
+          CSC_FOR_PULL_REQUEST: "true"
+      - name: Test Mac packaging signatures
+        if: matrix.platform == 'mac'
+        run: npm run test:packaging
+      - name: Verify and smoke-test the final Mac installer
+        if: matrix.platform == 'mac'
+        run: node scripts/smoke-mac-dmg.mjs apps/desktop/dist/*.dmg
+      - name: Upload Mac preview installer
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-installers-mac-${{ matrix.arch }}
+          path: apps/desktop/dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: diagnostics-${{ matrix.os }}
-          path: apps/desktop/test-results/**
+          name: diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/test-results/**
+            apps/desktop/dist/builder-effective-config.yaml
           if-no-files-found: ignore

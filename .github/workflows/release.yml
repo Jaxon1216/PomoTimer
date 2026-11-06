@@ -64,7 +64,14 @@ jobs:
           DEBUG: pw:api
       - name: Build installer
         run: npm exec --workspace=@pomodoro/desktop -- electron-builder ${{ matrix.builder_args }} --publish never
-      - name: Smoke-test packaged application
+      - name: Test Mac packaging signatures
+        if: matrix.platform == 'mac'
+        run: npm run test:packaging
+      - name: Verify and smoke-test the final Mac installer
+        if: matrix.platform == 'mac'
+        run: node scripts/smoke-mac-dmg.mjs apps/desktop/dist/*.dmg
+      - name: Smoke-test packaged Windows application
+        if: matrix.platform == 'windows'
         run: node scripts/smoke-packaged.mjs
       - uses: actions/upload-artifact@v4
         with:

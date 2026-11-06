@@ -35,9 +35,27 @@
 
 发版前，把[变更记录](../CHANGELOG.md)的 `Unreleased` 条目整理到与 tag 对应的版本段（例如 `## [0.1.0-beta.2]`），填写「改动」和「已知问题」。[发布脚本](../scripts/prepare-release.mjs)会读取这个版本段，和安装包链接一起生成 GitHub 发布说明。
 
-推送与根目录及 desktop package version 一致的 `v*` tag，会触发 Release 工作流。三个平台分别运行检查、E2E、安装包构建及打包应用启动测试；全部成功后才上传 SHA256SUMS 并发布预发布版本。打包应用的检查可在对应系统执行 `node scripts/smoke-packaged.mjs`。
+推送与根目录及 desktop package version 一致的 `v*` tag，会触发 Release 工作流。三个平台分别运行检查、E2E、安装包构建及打包应用启动测试；macOS 还检查签名和 DMG 内的应用。全部成功后才上传 SHA256SUMS 并发布预发布版本。
 
-当前构建没有开发者证书签名或 macOS 公证，真实系统输入、通知、锁屏、睡眠及人工安装验证仍属发布门。每次发布说明必须列出尚未修复的已知问题，不能把自动化启动测试当作平台验收。
+当前源码的 macOS 免费分发配置使用 ad hoc 签名并保留 hardened runtime。ad hoc 不含 Developer ID 身份，也不提供公证；完整性校验通过不代表 Gatekeeper 会自动允许运行。上游 Electron 运行时、嵌套可执行代码和原生模块需要随最终应用一起验证。公开 beta.2 包未包含这次配置与验证改动，不能用新构建结果替它背书。
+
+在 macOS 的仓库根目录先打包，再运行以下检查；路径参数应指向本次构建产物：
+
+```sh
+npm run package
+npm run test:packaging
+node scripts/smoke-packaged.mjs
+node scripts/verify-mac-signature.mjs "/path/to/Pomodoro Timer.app"
+node scripts/smoke-mac-dmg.mjs "/path/to/Pomodot-version-mac-arch.dmg"
+```
+
+`test:packaging` 仅在 macOS 执行，默认读取已构建的当前架构 `.app`；也可用 `npm run test:packaging -- "/path/to/Pomodoro Timer.app"` 指定路径。它调用真实 `codesign` 验证原包，复制到临时目录后分别篡改签名覆盖的资源与原生 `.node` 模块，并断言验签拒绝这些副本。测试不会修改原包。
+
+`verify-mac-signature.mjs` 检查最终应用的签名；`smoke-mac-dmg.mjs` 只读挂载 DMG，将应用复制到临时目录后验签并运行 Playwright 启动检查。后者不会模拟或删除 quarantine 下载标记。普通 CI 和发布 CI 的 ARM64、Intel x64 两个 macOS runner 均在打包后执行这些检查；Windows 不运行 macOS 签名回归。
+
+上述自动化不能证明经浏览器下载后，Finder 首次打开与“隐私与安全性”的批准流程可用；这些结果必须按 OS、芯片、构建和文件校验值单独记录在[路线图](./roadmap.md#安装分发验证)。
+
+真实系统输入、通知、锁屏、睡眠及人工安装验证仍属发布门。每次发布说明必须列出签名、公证状态和尚未修复的已知问题，不能把自动化启动测试当作平台验收。用户安装步骤和不同系统警告的处理边界见[首页](../README.md#macos-首次打开)。
 
 ## 本地原生回归
 

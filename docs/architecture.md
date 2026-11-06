@@ -56,3 +56,5 @@ Main 管理一个可缩放的 BrowserWindow，并根据内容区域约束原生�
 `TimerEngine` 用注入的单调时钟、墙钟和 Store 独立测试。Renderer 测试验证计时控制、导航、休息等待文案和故障提示。布局检查覆盖最小窗口、窄窗的高度上限和宽矮窗口。Electron E2E 验证真实 preload/IPC、原生窗口尺寸、导航和计时事件同步。macOS/Windows 的 idle、通知、托盘和睡眠恢复仍需真实设备手工验证。
 
 `npm run test:store` 使用与 Electron 相同 ABI 的运行时验证真实 SQLite 的旧库兼容、校验和、事务回滚、去重及包含 WAL 的恢复副本。普通 PR CI 与发布 CI 均运行原生数据库测试和 Electron E2E；模拟电源事件只验证事件接线，不能替代真实锁屏和睡眠验收。
+
+macOS 免费分发构建使用 ad hoc 签名并保留 hardened runtime，签名与安装包检查由发布脚本负责，不进入应用业务进程。ad hoc 只提供代码完整性信息，不提供 Developer ID 身份或公证。DMG 检查只读挂载、复制到临时目录、验签并直接启动应用；它不模拟或移除 quarantine，也不覆盖浏览器下载后 Finder 首次打开与用户批准的系统路径。此路径的真实设备验收单独记录在[路线图](./roadmap.md#安装分发验证)。
