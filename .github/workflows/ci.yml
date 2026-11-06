@@ -55,6 +55,10 @@ jobs:
       - name: Build Mac preview installer
         if: matrix.platform == 'mac'
         run: npm exec --workspace=@pomodoro/desktop -- electron-builder ${{ matrix.builder_args }} --publish never
+        env:
+          # The custom hook uses free ad hoc signing without certificates or signing credentials.
+          # Allow it on read-only pull_request jobs; never use pull_request_target for these builds.
+          CSC_FOR_PULL_REQUEST: "true"
       - name: Test Mac packaging signatures
         if: matrix.platform == 'mac'
         run: npm run test:packaging
