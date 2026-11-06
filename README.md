@@ -14,6 +14,8 @@
 
 如需测试本次修复，可下载 [Intel x64 预览包](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745/artifacts/13487899158)或 [Apple Silicon ARM64 预览包](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745/artifacts/13488491818)。这是提交 `5449d66` 的 CI 产物，需要登录 GitHub，保留 14 天；先解压 ZIP，再按下文安装其中的 DMG。文件名仍带 `beta.2`，但内容与下方旧 Release 不同。两个架构均通过签名与安装包自动化检查，人工首次打开状态见[安装分发验证](docs/roadmap.md#安装分发验证)。
 
+ARM64 免费分发流程已在 macOS 26.4.1 真机完成浏览器下载、首次系统批准，以及完整退出后的再次打开；Intel 目前通过 CI，仍待真实 Intel Mac 验证。具体测试构建与校验值见上述验证记录。
+
 | 平台 | 安装包 |
 | --- | --- |
 | Windows x64 | [EXE 安装向导](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.2/Pomodot-0.1.0-beta.2-windows-x64-setup.exe) |

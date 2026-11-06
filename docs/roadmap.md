@@ -27,7 +27,7 @@
 | 平台与构建 | 构建机自动化 | 浏览器下载、安装与首次打开 |
 | --- | --- | --- |
 | macOS Intel x64，新增签名配置后的构建 | PR 与 push CI 的签名回归、DMG 检查通过 | 待真实 Intel Mac 验证 |
-| macOS Apple Silicon ARM64，新增签名配置后的构建 | 本地完整打包、签名与 DMG 检查通过；PR 与 push CI 通过 | Chrome 下载、Finder 解压复制与安装后验签通过；已走到“仍要打开”，等待设备使用者完成系统身份认证 |
+| macOS Apple Silicon ARM64，新增签名配置后的构建 | 本地完整打包、签名与 DMG 检查通过；PR 与 push CI 通过 | macOS 26.4.1 上 Chrome 下载、Finder 解压复制、安装后验签、首次系统批准与退出后再次打开通过；统计页读取与返回计时器正常 |
 | Windows x64 | PR 与 push CI 通过；不执行 macOS 签名回归 | EXE 安装、SmartScreen 提示及真实使用仍需人工验收 |
 
 本地自动化：Apple Silicon、macOS 26.4.1（25E253）、Node.js 24.15，源码 [5449d66](https://github.com/Jaxon1216/PomoTimer/commit/5449d66)。`npm run package -- --mac dmg --arm64 --publish never` 完整通过；lint、typecheck、120 个单元/组件测试、12 个真实 SQLite 测试和 14 个 Electron E2E 通过。最终应用验签、资源与原生 `.node` 篡改拒绝、DMG 复制后启动及清理均通过，真实 SIGINT 中断后的清理也通过。这些检查使用隔离数据目录，没有验证 Gatekeeper 的用户批准。
@@ -36,6 +36,8 @@
 
 CI 自动化：源码 `5449d66` 的 [PR 检查](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745)和 [push 检查](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187706071)均在 Windows x64、macOS ARM64、macOS Intel x64 三个平台通过。PR 产物为 [ARM64 DMG](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745/artifacts/13488491818)和 [Intel x64 DMG](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745/artifacts/13487899158)；这些 artifact 仅用于验证，不是 GitHub Release。
 
+文档更新提交 `2f7e160` 的 [PR 检查](https://github.com/Jaxon1216/PomoTimer/actions/runs/42189896765)也在上述三个平台全部通过。
+
 浏览器与 Finder 验证：在同一台 Apple Silicon、macOS 26.4.1（25E253）上，使用 Chrome 下载源码 `56e21ef` 的 [ARM64 artifact](https://github.com/Jaxon1216/PomoTimer/actions/runs/42186699357/artifacts/13488291172)，再用 Finder 解压并将 DMG 内的应用复制到用户 Applications 下的独立测试目录。Chrome 下载产生的 quarantine 标记全程保留，安装后的完整签名检查通过。该构建与 `5449d66` 的应用代码和签名实现相同。
 
 | 浏览器验证产物 | SHA256 |
@@ -43,9 +45,11 @@ CI 自动化：源码 `5449d66` 的 [PR 检查](https://github.com/Jaxon1216/Pom
 | Chrome 下载的 artifact ZIP | `096269d80a8cd7e400390dff8a22f882129a79f216506ccdb0480022c0f2264f` |
 | Finder 解压后的 ARM64 DMG | `08af3edbbd749f1020a832d9090b96f374b3a110b2db46520aca2ad4968abfb6` |
 
-首次从 Finder 打开时，系统显示“未打开‘Pomodoro Timer’”，正文为“Apple 无法验证‘Pomodoro Timer’是否包含可能危害 Mac 安全或泄漏隐私的恶意软件”，仅有“完成”和“移到废纸篓”按钮。点击“完成”，进入“系统设置 → 隐私与安全性 → 仍要打开”，再在“打开‘Pomodoro Timer’？”确认框中选择“仍要打开”后，系统要求“使用管理员触控 ID 或输入管理员密码允许此次操作”。当前等待设备使用者本人完成认证，尚未观察到应用窗口；不能将等待中的进程视为启动成功。
+首次从 Finder 打开时，系统显示“未打开‘Pomodoro Timer’”，正文为“Apple 无法验证‘Pomodoro Timer’是否包含可能危害 Mac 安全或泄漏隐私的恶意软件”，仅有“完成”和“移到废纸篓”按钮。点击“完成”，进入“系统设置 → 隐私与安全性 → 仍要打开”，再在“打开‘Pomodoro Timer’？”确认框中选择“仍要打开”后，系统要求“使用管理员触控 ID 或输入管理员密码允许此次操作”。设备使用者本人完成认证后，应用窗口正常出现。
 
-人工验收交接：分支 `codex/free-mac-distribution`，实现提交 `5449d66`，[PR #6](https://github.com/Jaxon1216/PomoTimer/pull/6)。下一步为完成当前系统身份认证，确认已安装测试应用窗口出现，正常退出后再从 Finder 打开，并补录本节结果。Intel Mac 的同一路径仍需在真实 Intel 设备验证。
+随后通过应用菜单 Quit 完整退出，确认原进程结束，再从 Finder 打开同一已安装应用。新进程显示正常主界面，没有再次要求 Gatekeeper 批准；统计页成功读取，并可返回计时器。quarantine 标记始终保留，由系统批准前的 `0181` 变为批准后的 `01c1`；未执行移除下载标记或全局关闭安全保护的操作。此次真实用户数据下未操作开始/暂停，这两项由隔离 DMG 自动化检查覆盖。验证结束后已成功卸载本次 DMG 挂载，已安装应用保持正常。
+
+剩余人工发布门：Intel Mac 的下载、首次批准与再次打开，以及 Windows 安装与 SmartScreen 路径仍待真实设备验证。ARM64 的通过结果仅对应本节记录的系统与构建，不代表全部 macOS 版本或 Phase 1 的输入、通知、锁屏与睡眠验收均已通过。[PR #6](https://github.com/Jaxon1216/PomoTimer/pull/6)中的改动尚未发布为新版 Release。
 
 每条实测记录须包含 OS 版本与 build、芯片、源码 commit、安装包版本与 SHA256、下载方式、完整系统提示，以及首次批准、再次启动和开始/暂停的结果。macOS 15 及以上通过“系统设置 → 隐私与安全性”批准可信应用；不存在入口或出现损坏、恶意软件提示时，记录实际失败并继续诊断，不以全局关闭安全保护作为通过条件。CI 的自动启动与签名验证结果应单独记录。
 
