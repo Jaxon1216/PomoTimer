@@ -1,14 +1,39 @@
-# PomoTimer · Pomodot
+<p align="center">
+  <img src="apps/desktop/resources/icons/pomodoro-timer-master.png" width="96" height="96" alt="Pomodot 折纸回环应用图标">
+</p>
 
-面向 macOS 和 Windows 的本地桌面番茄钟。用可配置的专注与休息节奏、系统输入闲置检测和本地统计，记录真正完成的专注轮次。
+<h1 align="center">PomoTimer · Pomodot</h1>
 
-仓库名为 **PomoTimer**，安装包以 **Pomodot** 发布，应用内名称为 **Pomodoro Timer**。
+<p align="center">
+  为电脑前的工作与学习安排专注和休息。<br>
+  macOS / Windows 本地番茄钟，支持输入闲置自动暂停、桌面小窗与专注统计。
+</p>
 
-[下载安装包](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.2) · [更新记录](CHANGELOG.md) · [文档索引](docs/README.md) · [问题反馈](https://github.com/Jaxon1216/PomoTimer/issues)
+<p align="center">
+  <a href="https://github.com/Jaxon1216/PomoTimer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Jaxon1216/PomoTimer/ci.yml?branch=main&amp;label=CI" alt="main 分支 CI 状态"></a>
+  <a href="https://github.com/Jaxon1216/PomoTimer/releases"><img src="https://img.shields.io/github/v/release/Jaxon1216/PomoTimer?include_prereleases&amp;label=pre-release" alt="最新预发布版本"></a>
+</p>
+
+<p align="center">
+  <a href="#下载与安装">下载安装</a> ·
+  <a href="#基本使用">开始第一轮</a> ·
+  <a href="#从源码开发">源码运行</a> ·
+  <a href="docs/README.md">文档</a> ·
+  <a href="CHANGELOG.md">更新记录</a> ·
+  <a href="https://github.com/Jaxon1216/PomoTimer/issues">反馈问题</a>
+</p>
+
+## 界面预览
+
+| 开始一轮专注 | 缩成桌面小窗 |
+| :---: | :---: |
+| [<img src="docs/assets/screenshots/timer-light.png" width="320" alt="第一轮专注显示 30:00、准备开始和圆形播放按钮">](docs/assets/screenshots/timer-light.png) | [<img src="docs/assets/screenshots/long-break-waiting-compact.png" width="220" alt="220×240 小窗显示 10 分钟长休，等待无输入条件后自动开始">](docs/assets/screenshots/long-break-waiting-compact.png) |
+
+截图来自 macOS 上的真实 Electron **开发版**测试窗口。下文使用与功能说明以当前 `main` 为准，已发布安装包的布局和能力有所不同，见[版本与已知限制](#版本与已知限制)。[截图来源与重现方法](docs/README.md#产品截图)
 
 ## 下载与安装
 
-当前公开版本为 **v0.1.0-beta.2（预发布）**，供体验与反馈使用，尚未完成全部真实设备验收。
+当前公开版本为 **[v0.1.0-beta.2（预发布）](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.2)**，供体验与反馈使用，尚未完成全部真实设备验收。
 
 | 平台 | 安装包 |
 | --- | --- |
@@ -21,9 +46,14 @@
 - 下载后可与同一发布中的 [SHA256SUMS](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.2/SHA256SUMS) 核对文件校验值。
 - 当前安装包**未使用开发者证书签名，macOS 也未公证**。系统可能阻止打开或提示未知发布者；请先核对来源与校验值，不要全局关闭系统安全保护。
 
+使用 beta.2 时，**锁屏前请手动暂停，升级前请备份本地数据**。仓库名为 **PomoTimer**，安装包以 **Pomodot** 发布，应用内名称为 **Pomodoro Timer**。
+
 ### 版本与已知限制
 
-**主分支不等于已发布安装包。** `main` 已合入[计时器故障恢复、数据保护和实时统计修复（#2）](https://github.com/Jaxon1216/PomoTimer/pull/2)，这些改动尚未包含在上面的 beta.2 安装包中；体验主分支需从源码运行。以下功能和开发说明以当前主分支为准，下载版以[对应发布说明](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.2)为准。
+`main` 中的窗口缩放、锁屏暂停、故障恢复和实时统计等更新尚未发布到 beta.2。体验这些改动请[从源码运行](#从源码开发)；下载版的具体能力以[发布说明](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.2)为准。
+
+<details>
+<summary>展开查看 beta.2 已知问题、源码更新与验收状态</summary>
 
 beta.2 已知问题：
 
@@ -32,32 +62,43 @@ beta.2 已知问题：
 - 统计页停留期间不会实时刷新，重新进入页面可刷新。
 - 输入检测持续故障时，手动继续可能再次被暂停。
 
+当前源码已合入[故障恢复、数据保护与实时统计修复（#2）](https://github.com/Jaxon1216/PomoTimer/pull/2)，以及[拖动缩成桌面小窗（#5）](https://github.com/Jaxon1216/PomoTimer/pull/5)。其中包含锁屏暂停、输入故障下的显式手动计时、单实例保护、SQLite 故障备份与用户确认重建；更多变化见 [Unreleased](CHANGELOG.md#unreleased)。部分旧快照仍可能无法恢复，应用会保留备份，仅在用户选择后归档并重建。
+
 安装包已在 GitHub runner 完成构建和打包应用自动化检查；真实设备的系统输入、通知、锁屏、睡眠及人工安装验证仍未全部完成。模拟事件和自动化启动测试不代表真实平台验收，详见 [Phase 1 发布门](docs/roadmap.md#phase-1-发布门)。
+
+</details>
+
+## 基本使用
+
+以默认的第一轮专注为例：
+
+1. **开始专注**：打开应用，看到 `30:00` 和“准备开始”，点击圆形播放按钮（开始计时），倒计时开始递减。
+2. **按需暂停**：连续 40 秒无系统输入时，专注自动暂停；恢复输入后按状态自动继续。如果主动点击暂停，只有你点击继续才会恢复。
+3. **进入休息**：完整完成这轮后，应用进入 5 分钟短休的等待状态。达到无输入条件后自动开始，也可点击“手动开始休息”；再次输入仍可能自动暂停休息。
+4. **查看结果**：点击右上角的统计图标。在没有其他完成记录的情况下，今日统计会显示 **1 轮、30 分钟**。专注未完成就跳过或重置时，不计入统计；下一轮专注需要手动开始。
+
+默认周期（分钟）：
+
+```text
+专注 30 → 短休 5 → 专注 30 → 短休 5 → 专注 30 → 长休 10
+```
+
+通过“更多操作”打开设置，可调整专注与休息时长、每周期轮数和输入闲置阈值。修改节奏后，正在运行的轮次仍按原计划计时，详见[设置生效时机](docs/product-spec.md#2-默认配置与设置)。
+
+想把计时器留在桌面一角，可以拖动窗口边缘缩小，拖动留白移动，再在设置中开启置顶。开发版最小内容区域为 **160×180**，高度最多为宽度的 1.5 倍（宽 160 px 时最高 240 px）；小窗保留轮次、剩余时间、暂停原因、圆形操作按钮与统计入口。[查看最小窗口](docs/assets/screenshots/drag-minimum-interrupted-break.png)
 
 ## 主要功能
 
-- **可配置节奏**：默认 `30 / 5 / 30 / 5 / 30 / 10` 分钟，三轮专注后进入长休；可调整各轮时长和每周期专注轮数。
-- **输入闲置检测**：默认连续 40 秒无系统输入后暂停专注，恢复输入后按状态自动继续；手动暂停不会被自动解除。
-- **两种休息模式**：活动休息与桌前休息。当前均基于无输入信号判断开始与暂停，不代表已验证离席、走动或运动。
-- **本地统计**：今日、本周和最近 52 周热力图；只有完整完成的专注轮才计入统计，跳过或重置不计入。
-- **桌面控制**：拖动窗口边缘缩放计时器，拖动留白移动窗口。支持置顶、托盘菜单、系统通知，以及浅色/深色/跟随系统主题。
-- **恢复与数据保护（主分支）**：睡眠与重启不补计离线时间；锁屏门禁、输入故障下的显式手动计时、单实例保护、SQLite 故障备份与用户确认重建。
-
-### 界面预览
-
-| 初始窗口 · 等待开始 | 拖小窗口 · 等待活动休息 |
+| 功能 | 具体行为 |
 | --- | --- |
-| <img src="docs/assets/screenshots/timer-light.png" width="360" alt="初始窗口显示第一轮专注、30 分钟倒计时和开始按钮"> | <img src="docs/assets/screenshots/long-break-waiting-compact.png" width="220" alt="小窗显示 10 分钟长休，等待离席后自动开始"> |
+| 可配置节奏 | 默认三轮专注后进入长休，可调整时长与每周期轮数。 |
+| 输入闲置检测 | 默认连续 40 秒无输入后暂停专注，手动暂停不会被自动解除。 |
+| 两种休息模式 | 活动休息与桌前休息，当前均依据无输入信号判断开始与暂停。 |
+| 本地统计 | 今日、本周与最近 52 周热力图，仅统计完整完成的专注轮。 |
+| 桌面控制 | 窗口缩放、置顶、托盘菜单和系统通知；浅色、深色与跟随系统主题。 |
+| 恢复与保护 | 睡眠、重启不补计离线时间；开发版增加锁屏暂停与存储故障保护。 |
 
-这两张图来自开发版在 macOS 上的真实 Electron 测试窗口。[截图版本与重现方法](docs/README.md#产品截图)
-
-### 基本使用
-
-1. 打开应用，点击开始进入第一轮专注。
-2. 专注完整结束后进入休息轮。休息默认等待无输入条件，也可手动开始；再次输入仍可能自动暂停休息。
-3. 使用暂停/继续控制当前轮，或点击下一步跳过；下一轮专注需要手动开始。
-4. 点击计时器右上角的统计图标查看专注记录，点击“更多操作”打开设置。修改节奏后，正在运行的轮次仍按原计划计时。[设置生效时机](docs/product-spec.md#2-默认配置与设置)
-5. 在开发版中，拖动窗口边缘调整大小，拖动计时器上的留白移动窗口。内容区域最小为 160×180，宽 160 px 时最高可拉到 240 px。小窗仍显示轮次、剩余时间和暂停原因，可直接点圆形播放按钮继续，或点统计图标查看记录。[查看最小窗口](docs/assets/screenshots/drag-minimum-interrupted-break.png)
+输入检测只知道有没有操作电脑，不能确认用户是否离席、走动或运动。阅读、思考等没有输入的活动也可能触发自动暂停，可按需调整闲置阈值。
 
 ## 本地数据与隐私
 
@@ -77,6 +118,8 @@ cd PomoTimer
 npm ci
 npm run dev
 ```
+
+首次运行且没有已有数据时，应出现上图中的计时器：第一轮专注、`30:00`、等待开始。点击播放按钮即可按[基本使用](#基本使用)走完一轮；再次打开会恢复上次轮次与剩余时间。
 
 项目使用 npm workspaces 和根目录 `package-lock.json`。`dev` 会先为当前 Electron 重建原生依赖，再启动 electron-vite；需要可用的本机图形环境，不能用普通浏览器替代完整桌面验证。
 
@@ -111,6 +154,9 @@ Electron main
 
 React 负责展示和交互，不拥有权威计时或数据库；计时核心是独立于 Electron API 的 TypeScript 模块。当前不使用 Go/Rust 侧车或 HTTP/WebSocket 服务。
 
+<details>
+<summary>展开查看源码目录</summary>
+
 ```text
 apps/desktop/src/main/      Electron 集成、计时核心、统计和 SQLite
 apps/desktop/src/preload/   受限的类型化桌面 API
@@ -123,6 +169,8 @@ scripts/                   原生验证、打包检查和发布辅助脚本
 docs/                      产品、架构、契约与路线图
 docs/assets/screenshots/   供阅读文档使用的产品截图
 ```
+
+</details>
 
 ## 文档与反馈
 
