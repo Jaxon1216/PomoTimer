@@ -266,6 +266,24 @@ select:focus-visible {
   background: color-mix(in srgb, var(--foreground) 9%, transparent);
 }
 
+.presenceSwitch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.presenceSwitch:hover { color: var(--foreground); }
+.presenceSwitch:disabled { opacity: 0.5; cursor: wait; }
+
 .timerStage {
   display: grid;
   width: 100%;

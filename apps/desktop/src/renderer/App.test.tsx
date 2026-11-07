@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { formatDuration } from "./time";
+import { startCameraPresence } from "./camera-presence";
+vi.mock("./camera-presence", () => ({ startCameraPresence: vi.fn(() => vi.fn()) }));
 import type {
   Capabilities,
   CoreEvent,
@@ -142,6 +144,8 @@ describe("App", () => {
       getSnapshot: vi.fn().mockResolvedValue(snapshot),
       getSettings: vi.fn().mockResolvedValue(settings),
       getCapabilities: vi.fn().mockResolvedValue(capabilities),
+      getCameraState: vi.fn().mockResolvedValue({ enabled: false, generation: 0 }),
+      reportCameraPresence: vi.fn().mockResolvedValue(snapshot),
       getStatistics: vi.fn().mockResolvedValue({
         generatedAt: "2026-09-08T09:00:00.000Z",
         today: { localDate: "2026-09-08", completedFocusMinutes: 0, completedFocusRounds: 0 },
@@ -173,6 +177,56 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "跳到下一轮" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
     expect(screen.getByRole("menuitem", { name: "重新开始当前轮次" })).toBeEnabled();
+  });
+
+  it("keeps camera off by default and switches modes only after an explicit choice", async () => {
+    const start = vi.mocked(startCameraPresence);
+    start.mockClear();
+    vi.mocked(window.pomodoro.updateSettings).mockResolvedValue({ ...settings, focusPresenceSource: "camera" });
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "感知模式：触控，切换为监控" }));
+    await waitFor(() => expect(window.pomodoro.updateSettings).toHaveBeenCalledWith({ focusPresenceSource: "camera" }));
+    await act(async () => eventListener?.({ type: "camera.state", state: { enabled: true, generation: 2 } }));
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "感知模式：监控，切换为触控" })).toBeEnabled();
+    const [report] = start.mock.calls[0]!;
+    await act(async () => { await report("present"); });
+    expect(window.pomodoro.reportCameraPresence).toHaveBeenCalledWith("present", 2);
+    const stop = start.mock.results[0]!.value;
+    await act(async () => {
+      eventListener?.({ type: "settings.changed", settings });
+      eventListener?.({ type: "camera.state", state: { enabled: false, generation: 3 } });
+    });
+    expect(stop).toHaveBeenCalledOnce();
+    await act(async () => { await report("away"); });
+    expect(window.pomodoro.reportCameraPresence).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports camera failure to Main and reflects the visible input fallback", async () => {
+    const start = vi.mocked(startCameraPresence);
+    start.mockClear();
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    await act(async () => eventListener?.({ type: "camera.state", state: { enabled: true, generation: 4 } }));
+    await act(async () => { start.mock.calls[0]![1]("摄像头权限未开启"); });
+    expect(window.pomodoro.reportCameraPresence).toHaveBeenCalledWith("unknown", 4);
+    await act(async () => {
+      eventListener?.({ type: "settings.changed", settings });
+      eventListener?.({ type: "camera.state", state: { enabled: false, generation: 5 } });
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("摄像头权限未开启");
+    expect(screen.getByRole("button", { name: "感知模式：触控，切换为监控" })).toBeEnabled();
+  });
+
+  it("preserves unsaved settings when the immediate sensing mode changes", async () => {
+    render(<App />);
+    await openSettings();
+    fireEvent.change(screen.getByRole("spinbutton", { name: "专注时长" }), { target: { value: "25" } });
+    await act(async () => eventListener?.({ type: "settings.changed", settings: { ...settings, focusPresenceSource: "camera" } }));
+    expect(screen.getByRole("spinbutton", { name: "专注时长" })).toHaveValue(25);
+    expect(screen.getByRole("button", { name: "监控" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("applies the short-break color variant from the Core round kind", async () => {
@@ -236,7 +290,8 @@ describe("App", () => {
     const stats = screen.getByRole("menuitem", { name: "打开统计" });
     const openSettingsItem = screen.getByRole("menuitem", { name: "打开设置" });
     const restart = screen.getByRole("menuitem", { name: "重新开始当前轮次" });
-    expect(screen.getAllByRole("menuitem")).toEqual([stats, openSettingsItem, restart]);
+    const switchMode = screen.getByRole("menuitem", { name: "切换为监控感知" });
+    expect(screen.getAllByRole("menuitem")).toEqual([stats, openSettingsItem, switchMode, restart]);
     expect(stats).toHaveFocus();
     fireEvent.keyDown(stats, { key: "ArrowDown" });
     expect(openSettingsItem).toHaveFocus();

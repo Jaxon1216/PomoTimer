@@ -7,9 +7,12 @@ describe("camera heartbeat", () => {
     camera.setEnabled(true, 100);
     expect(camera.expired(25_099)).toBe(false);
     expect(camera.expired(25_100)).toBe(true);
-    camera.report(camera.state.generation, 1000);
-    expect(camera.expired(5999)).toBe(false);
-    expect(camera.expired(6000)).toBe(true);
+    expect(() => camera.report(camera.state.generation, 25_100)).toThrow("超时");
+    camera.setEnabled(false, 25_101);
+    camera.setEnabled(true, 25_102);
+    camera.report(camera.state.generation, 26_000);
+    expect(camera.expired(30_999)).toBe(false);
+    expect(camera.expired(31_000)).toBe(true);
   });
 
   it("rejects late results after stopping, restarting or switching modes", () => {

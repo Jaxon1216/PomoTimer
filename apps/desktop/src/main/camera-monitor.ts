@@ -20,6 +20,7 @@ export class CameraMonitor {
 
   report(generation: number, now: number): void {
     if (!this.value.enabled || generation !== this.value.generation) throw new Error("摄像头会话已失效");
+    if (this.expired(now)) throw new Error("摄像头检测响应超时");
     this.deadline = now + 5_000;
   }
 

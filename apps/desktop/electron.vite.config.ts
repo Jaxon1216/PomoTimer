@@ -1,5 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
+import { resolve } from "node:path";
 
 export default defineConfig({
   main: {
@@ -17,6 +18,7 @@ export default defineConfig({
     },
   },
   renderer: {
+    publicDir: resolve(__dirname, "resources/camera"),
     plugins: [react()],
     server: {
       port: 5174,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import {
   BarChart3,
+  Camera,
   ChevronLeft,
   CircleHelp,
   Moon,
@@ -15,6 +16,8 @@ import {
 } from "lucide-react";
 import type {
   CoreEvent,
+  CameraState,
+  PresenceSource,
   Settings,
   SettingsPatch,
   StatisticsSnapshot,
@@ -22,6 +25,7 @@ import type {
   TimerSnapshot,
 } from "../shared/contracts";
 import { formatDuration } from "./time";
+import { startCameraPresence } from "./camera-presence";
 
 type View = "timer" | "settings" | "stats";
 
@@ -39,6 +43,8 @@ function statusText(snapshot: TimerSnapshot): string {
   switch (snapshot.automation.pauseReason) {
     case "input-away":
       return "无输入 · 自动暂停";
+    case "camera-away":
+      return "未检测到在场 · 自动暂停";
     case "break-condition": {
       if (snapshot.remainingMs < snapshot.round.totalDurationMs && snapshot.automation.inputPresence === "present") {
         return "有输入 · 休息暂停";
@@ -48,7 +54,7 @@ function statusText(snapshot: TimerSnapshot): string {
       return `${condition} · 将自动${action}`;
     }
     case "source-unavailable":
-      return "输入检测不可用";
+      return snapshot.automation.activePresenceSource === "camera" ? "等待摄像头检测" : "输入检测不可用";
     case "system-suspend":
       return "系统恢复后已暂停";
     case "system-lock":
@@ -111,11 +117,15 @@ function TimerView({
   settings,
   onCommand,
   onView,
+  onModeChange,
+  modeChanging,
 }: {
   snapshot: TimerSnapshot;
   settings: Settings;
   onCommand: (command: TimerCommand) => void;
   onView: (view: View) => void;
+  onModeChange: (source: PresenceSource) => void;
+  modeChanging: boolean;
 }): ReactElement {
   const action = primaryCommand(snapshot);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -124,7 +134,11 @@ function TimerView({
   const progress = 1 - snapshot.remainingMs / snapshot.round.totalDurationMs;
   const remaining = formatDuration(snapshot.remainingMs);
   const circumference = 2 * Math.PI * 108;
-  const monitorStatus = snapshot.automation.inputMonitoringAvailable
+  const monitorStatus = snapshot.automation.activePresenceSource === "camera"
+    ? snapshot.automation.cameraMonitoringAvailable
+      ? `监控感知 · ${snapshot.automation.cameraPresence === "present" ? "在场" : "离开"}`
+      : "监控感知 · 正在启动摄像头"
+    : snapshot.automation.inputMonitoringAvailable
     ? `系统输入检测 · ${settings.inputIdleThresholdSeconds} 秒阈值`
     : snapshot.status === "auto-paused" && snapshot.automation.pauseReason === "source-unavailable"
       ? "已暂停 · 可手动继续"
@@ -186,6 +200,7 @@ function TimerView({
               <div className="timerMenu" id="timer-menu" role="menu" aria-label="计时器操作" onKeyDown={navigateMenu}>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("stats"))}><BarChart3 size={15} />打开统计</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("settings"))}><SettingsIcon size={15} />打开设置</button>
+                <button type="button" role="menuitem" disabled={modeChanging} onClick={() => menuAction(() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input"))}><Camera size={15} />{settings.focusPresenceSource === "input" ? "切换为监控感知" : "切换为触控感知"}</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onCommand("reset"))}><RotateCcw size={15} />重新开始当前轮次</button>
               </div>
             )}
@@ -197,9 +212,11 @@ function TimerView({
         <div className="timerDetails">
           <div className="roundMeta">
             <h1 id="round-title">{labels[snapshot.round.kind]}</h1>
-            <span className="breakMode">
-              {snapshot.round.kind === "focus" ? "系统输入检测" : snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}
-            </span>
+            {snapshot.round.kind === "focus" ? <button type="button" className="presenceSwitch" disabled={modeChanging}
+              aria-label={`感知模式：${settings.focusPresenceSource === "input" ? "触控" : "监控"}，切换为${settings.focusPresenceSource === "input" ? "监控" : "触控"}`}
+              title="触控使用系统输入；监控使用摄像头，仅在本机判断在场，不保存或上传影像。" onClick={() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input")}>
+              {settings.focusPresenceSource === "camera" && <Camera size={12} />}{settings.focusPresenceSource === "input" ? "触控感知" : "监控感知"}
+            </button> : <span className="breakMode">{snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}</span>}
           </div>
           <div className="timerStatus" aria-live="polite">
             <div className={`statePill state-${snapshot.status}`} title={statusText(snapshot)}>
@@ -273,10 +290,14 @@ function SettingsView({
   settings,
   onSave,
   onBack,
+  onModeChange,
+  modeChanging,
 }: {
   settings: Settings;
   onSave: (patch: SettingsPatch) => Promise<void>;
   onBack: () => void;
+  onModeChange: (source: PresenceSource) => void;
+  modeChanging: boolean;
 }): ReactElement {
   const [draft, setDraft] = useState(settings);
   const [numbers, setNumbers] = useState(() => settingsNumbers(settings));
@@ -284,8 +305,12 @@ function SettingsView({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const savedTimeout = useRef<number | undefined>(undefined);
+  const previousSettings = useRef(settings);
 
   useEffect(() => {
+    const previous = previousSettings.current;
+    previousSettings.current = settings;
+    if ((Object.keys(settings) as Array<keyof Settings>).every((key) => key === "focusPresenceSource" || previous[key] === settings[key])) return;
     setDraft(settings);
     setNumbers(settingsNumbers(settings));
   }, [settings]);
@@ -383,6 +408,12 @@ function SettingsView({
 
           <section className="settingsSection">
             <h2>自动化</h2>
+            <div className="segmented" role="group" aria-label="专注感知模式">
+              <span>感知模式</span>
+              <button type="button" disabled={modeChanging} aria-pressed={settings.focusPresenceSource === "input"} onClick={() => onModeChange("input")}>触控</button>
+              <button type="button" disabled={modeChanging} aria-pressed={settings.focusPresenceSource === "camera"} onClick={() => onModeChange("camera")}>监控</button>
+            </div>
+            <p className="infoNote">立即生效。监控会请求摄像头权限，只在本机判断是否在场，不保存或上传影像。休息仍根据系统输入计时。切回触控会关闭摄像头。</p>
             {numberInput("inputIdleThresholdSeconds")}
             <div className="segmented">
               <span>默认休息模式</span>
@@ -628,6 +659,9 @@ export function App(): ReactElement {
   const [view, setView] = useState<View>("timer");
   const [fatalError, setFatalError] = useState<{ title: string; message: string; storage: boolean } | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [cameraState, setCameraState] = useState<CameraState>({ enabled: false, generation: 0 });
+  const [modeChanging, setModeChanging] = useState(false);
+  const modeChangePending = useRef(false);
   const statisticsRequest = useRef(0);
 
   const syncStats = useCallback(async () => {
@@ -654,13 +688,29 @@ export function App(): ReactElement {
     setSettings(await window.pomodoro.updateSettings(patch));
   }, []);
 
+  const changeMode = useCallback(async (source: PresenceSource) => {
+    if (modeChangePending.current) return;
+    modeChangePending.current = true;
+    setModeChanging(true);
+    try {
+      await saveSettings({ focusPresenceSource: source });
+      setOperationError(null);
+    } catch (reason) {
+      setOperationError(reason instanceof Error ? reason.message : "感知模式切换失败，请重试");
+    } finally {
+      modeChangePending.current = false;
+      setModeChanging(false);
+    }
+  }, [saveSettings]);
+
   useEffect(() => {
     let active = true;
-    void Promise.all([window.pomodoro.getSnapshot(), window.pomodoro.getSettings()])
-      .then(([nextSnapshot, nextSettings]) => {
+    void Promise.all([window.pomodoro.getSnapshot(), window.pomodoro.getSettings(), window.pomodoro.getCameraState()])
+      .then(([nextSnapshot, nextSettings, nextCameraState]) => {
         if (active) {
           setSnapshot(nextSnapshot);
           setSettings(nextSettings);
+          setCameraState((current) => current.generation > nextCameraState.generation ? current : nextCameraState);
         }
       })
       .catch((reason) => {
@@ -669,6 +719,8 @@ export function App(): ReactElement {
 
     const unsubscribe = window.pomodoro.subscribe((event: CoreEvent) => {
       if (event.type === "timer.snapshot") setSnapshot(event.snapshot);
+      if (event.type === "camera.state") setCameraState((current) => current.generation > event.state.generation ? current : event.state);
+      if (event.type === "settings.changed") setSettings(event.settings);
       if (event.type === "stats.changed") {
         ++statisticsRequest.current;
         setStatistics(event.statistics);
@@ -685,6 +737,21 @@ export function App(): ReactElement {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!cameraState.enabled || fatalError) return;
+    let active = true;
+    const stop = startCameraPresence(async (presence) => {
+      if (active) await window.pomodoro.reportCameraPresence(presence, cameraState.generation);
+    }, (message) => {
+      if (!active) return;
+      setOperationError(message);
+      void window.pomodoro.reportCameraPresence("unknown", cameraState.generation).catch(() => {
+        // Main 的心跳看门狗也会处理 IPC 中断，避免前端自行接管计时。
+      });
+    });
+    return () => { active = false; stop(); };
+  }, [cameraState.enabled, cameraState.generation, fatalError]);
 
   useEffect(() => {
     if (!settings) return;
@@ -736,10 +803,12 @@ export function App(): ReactElement {
   return <div className="appShell">
     {operationError && <div className="operationError" role="alert"><span>{operationError}</span>
       <button type="button" aria-label="关闭错误提示" onClick={() => setOperationError(null)}>关闭</button></div>}
-    {view === "settings" ? <SettingsView settings={settings} onSave={saveSettings} onBack={() => setView("timer")} />
+    {view === "settings" ? <SettingsView settings={settings} onSave={saveSettings} onBack={() => setView("timer")}
+      onModeChange={(source) => void changeMode(source)} modeChanging={modeChanging} />
       : view === "stats" ? <StatsView statistics={statistics} settings={settings} error={statisticsError}
         onRetry={() => void syncStats()} onBack={() => setView("timer")} />
         : <TimerView snapshot={snapshot} settings={settings}
+          onModeChange={(source) => void changeMode(source)} modeChanging={modeChanging}
           onCommand={(command) => void runCommand(command)} onView={setView} />}
   </div>;
 }
