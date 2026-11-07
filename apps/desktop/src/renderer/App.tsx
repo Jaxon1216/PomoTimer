@@ -747,7 +747,11 @@ export function App(): ReactElement {
       if (!active) return;
       setOperationError(message);
       void window.pomodoro.reportCameraPresence("unknown", cameraState.generation).catch(() => {
-        // Main 的心跳看门狗也会处理 IPC 中断，避免前端自行接管计时。
+        // 领域：Camera / IPC 故障
+        // 顺序：Renderer 故障上报失败 -> Main 心跳期限 -> 触控回退。
+        // 作用：跨进程中断时等待 Main 的安全回退。
+        // 原因：前端不能自行决定权威计时或持久化模式。
+        // 边界：本地摄像头已由 controller 释放，不在此重复启动。
       });
     });
     return () => { active = false; stop(); };
