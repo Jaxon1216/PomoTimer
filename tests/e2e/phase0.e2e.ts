@@ -302,7 +302,7 @@ test("starts through the restricted preload bridge and preserves native settings
     hasMainInspector: Reflect.has(globalThis, Symbol.for("pomodoro.desktop.inspect")),
   }));
   expect(bridgeShape.apiKeys).toEqual([
-    "command", "getCapabilities", "getSettings", "getSnapshot", "getStatistics", "subscribe", "updateSettings",
+    "command", "getCameraState", "getCapabilities", "getSettings", "getSnapshot", "getStatistics", "reportCameraPresence", "subscribe", "updateSettings",
   ]);
   expect(bridgeShape.hasNodeProcess).toBe(false);
   expect(bridgeShape.hasRequire).toBe(false);

@@ -1198,6 +1198,7 @@ input[aria-invalid="true"] {
 @container timer-window (max-width: 265px) or (height < 300px) {
   .timerFooter,
   .breakMode,
+  .presenceSwitch,
   .dialTotal,
   .monitorStatus[data-available="true"] {
     display: none;

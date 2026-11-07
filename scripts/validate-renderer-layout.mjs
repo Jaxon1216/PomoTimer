@@ -113,6 +113,8 @@ try {
     };
     window.pomodoro = {
       getSnapshot: async () => makeSnapshot(duration()),
+      getCameraState: async () => ({ enabled: false, generation: 0 }),
+      reportCameraPresence: async () => makeSnapshot(duration()),
       command: async () => makeSnapshot(duration()),
       getSettings: async () => ({ ...initialSettings, focusDurationSeconds: duration() / 1000 }),
       updateSettings: async (patch) => ({ ...initialSettings, ...patch }),
