@@ -103,6 +103,42 @@ test("new checkpoints, completion transactions, shutdown and recovery copies con
   } finally { store.close(); }
 }));
 
+test("persists camera selection and frozen progress without retaining camera presence", () => withDirectory((directory) => {
+  const store = new SqliteStore(directory);
+  let now = 0;
+  let remaining = 0;
+  try {
+    const engine = new TimerEngine(store, { now: () => now, wallDate: () => new Date(0) });
+    engine.applySettings({ focusPresenceSource: "camera" });
+    engine.cameraSample("present");
+    engine.command("start");
+    now = 5_000;
+    const paused = engine.cameraSample("away");
+    assert.equal(paused.status, "auto-paused");
+    assert.equal(paused.automation.cameraPresence, "away");
+    remaining = paused.remainingMs;
+  } finally { store.close(); }
+  const database = new Database(join(directory, "pomodoro.sqlite"));
+  try {
+    const checkpoint = database.prepare("SELECT snapshot_json FROM timer_snapshot").get() as { snapshot_json: string };
+    assert.doesNotMatch(checkpoint.snapshot_json, /automation|cameraPresence|cameraMonitoringAvailable|camera-away|present|away/);
+    assert.equal(JSON.parse(checkpoint.snapshot_json).remainingMs, remaining);
+  } finally { database.close(); }
+  const reopened = new SqliteStore(directory);
+  try {
+    assert.equal(reopened.loadSettings().focusPresenceSource, "camera");
+    const restored = new TimerEngine(reopened, { now: () => now, wallDate: () => new Date(0) });
+    assert.equal(restored.snapshot.remainingMs, remaining);
+    assert.equal(restored.snapshot.status, "auto-paused");
+    assert.equal(restored.snapshot.automation.activePresenceSource, "camera");
+    assert.equal(restored.snapshot.automation.cameraPresence, "unknown");
+    assert.equal(restored.snapshot.automation.cameraMonitoringAvailable, false);
+    assert.equal(restored.inputSample(0).status, "auto-paused");
+    assert.throws(() => restored.command("resume"), /摄像头/);
+    assert.equal(restored.cameraSample("present").status, "running");
+  } finally { reopened.close(); }
+}));
+
 test("retries WAL cleanup on reopening a migrated checkpoint after a reader releases the old pages", () => withDirectory((directory) => {
   const path = join(directory, "pomodoro.sqlite");
   const reader = new Database(path);

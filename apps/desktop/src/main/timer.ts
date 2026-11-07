@@ -1,4 +1,4 @@
-import { timerSnapshotSchema, type Presence, type Round, type Settings, type TimerCommand, type TimerSnapshot } from "../shared/contracts.js";
+import { timerSnapshotSchema, type Presence, type PresenceSource, type Round, type Settings, type TimerCommand, type TimerSnapshot } from "../shared/contracts.js";
 import { checkpointOf, type TimerCheckpoint } from "./checkpoint.js";
 
 export interface CompletedSession {
@@ -86,6 +86,7 @@ export class TimerEngine {
         },
       };
     }
+    this.snapshotValue.automation.activePresenceSource = this.activePresenceSource();
     this.persist();
   }
 
@@ -112,9 +113,27 @@ export class TimerEngine {
     if (patch.inputIdleThresholdSeconds !== undefined && patch.inputIdleThresholdSeconds !== this.settingsValue.inputIdleThresholdSeconds) {
       this.pendingBreakCountdown = undefined;
     }
+    const sourceChanged = patch.focusPresenceSource !== undefined && patch.focusPresenceSource !== this.settingsValue.focusPresenceSource;
     this.settingsValue = { ...this.settingsValue, ...patch, version: 1 };
     this.store.saveSettings?.(this.settingsValue);
-    this.persist();
+    // 领域：Timer / 感知源切换
+    // 顺序：Main 设置命令 -> applySettings -> 清空旧检测 -> 下一次有效源采样。
+    // 作用：切换专注源时冻结活动专注，保留 idle 与手动暂停锁。
+    // 原因：旧源结果不能授权新源继续计时，也不能把等待初始化的时间计入专注。
+    // 边界：休息仍由输入管理，不因专注源切换中断当前休息。
+    if (sourceChanged) {
+      this.invalidateCameraPresence();
+      if (this.snapshotValue.round.kind === "focus") {
+        this.manualInputFallback = false;
+        this.pendingBreakCountdown = undefined;
+        if (this.snapshotValue.status === "running") {
+          this.freeze(this.clock.now());
+          this.snapshotValue.status = "auto-paused";
+        }
+        if (this.snapshotValue.status === "auto-paused" && !this.screenLocked) this.snapshotValue.automation.pauseReason = "source-unavailable";
+      }
+      this.emit();
+    } else this.persist();
     return this.settingsValue;
   }
 
@@ -124,12 +143,16 @@ export class TimerEngine {
     this.pendingBreakCountdown = undefined;
     this.tick();
     const now = this.clock.now();
+    if ((command === "start" || command === "resume") && this.activePresenceSource() === "camera"
+      && this.snapshotValue.automation.cameraPresence !== "present") {
+      throw new Error("摄像头尚未检测到在场，请等待检测或切换触控感知");
+    }
 
     if (command === "start") {
       const canStart = this.snapshotValue.status === "idle"
         || (this.snapshotValue.round.kind !== "focus" && this.snapshotValue.status === "auto-paused");
       if (!canStart) throw new Error("当前轮次不能开始");
-      this.manualInputFallback = !this.inputAvailable;
+      this.manualInputFallback = this.activePresenceSource() === "input" && !this.inputAvailable;
       this.startRunning(now);
     } else if (command === "pause") {
       if (this.snapshotValue.status !== "running") throw new Error("当前轮次未在运行");
@@ -143,7 +166,7 @@ export class TimerEngine {
         throw new Error("当前轮次不能继续");
       }
       this.snapshotValue.automation.manualPauseLocked = false;
-      this.manualInputFallback = !this.inputAvailable;
+      this.manualInputFallback = this.activePresenceSource() === "input" && !this.inputAvailable;
       this.startRunning(now);
     } else if (command === "reset") {
       this.snapshotValue.status = "idle";
@@ -165,6 +188,8 @@ export class TimerEngine {
     const failed = !available || idleSeconds === undefined || !Number.isFinite(idleSeconds);
     this.inputAvailable = !failed;
     this.snapshotValue.automation.inputMonitoringAvailable = !failed;
+    this.inputPresence = failed ? "unknown" : idleSeconds >= this.settingsValue.inputIdleThresholdSeconds ? "away" : "present";
+    if (this.activePresenceSource() !== "input") return this.emit();
     if (failed) {
       this.pendingBreakCountdown = undefined;
       this.inputPresence = "unknown";
@@ -184,24 +209,60 @@ export class TimerEngine {
     if (this.screenLocked) return this.emit();
     const now = this.clock.now();
     const confirmedCountdownMs = this.observeBreakCountdown(idleSeconds, now);
-    if (!this.snapshotValue.automation.manualPauseLocked) {
-      const shouldRun = this.snapshotValue.round.kind === "focus" ? this.inputPresence === "present" : this.inputPresence === "away";
-      const conditionReason = this.snapshotValue.round.kind === "focus" ? "input-away" : "break-condition";
-      if (this.snapshotValue.status === "running" && !shouldRun) {
-        this.freeze(this.clock.now());
-        this.snapshotValue.status = "auto-paused";
-        this.snapshotValue.automation.pauseReason = conditionReason;
-      } else if (this.snapshotValue.status === "auto-paused" && shouldRun) {
-        this.startRunning(now - confirmedCountdownMs);
-        if (confirmedCountdownMs > 0) this.tick();
-      } else if (this.snapshotValue.status === "auto-paused" && (this.snapshotValue.automation.pauseReason === "source-unavailable" || this.snapshotValue.automation.pauseReason === "core-recovery")) {
-        this.snapshotValue.automation.pauseReason = conditionReason;
-      }
-    }
+    this.reconcilePresence(this.inputPresence, now, confirmedCountdownMs);
     return this.emit();
   }
 
+  // 领域：Timer / 摄像头在场
+  // 顺序：Renderer 本地检测 -> Main 校验当前会话 -> cameraSample -> reconcilePresence。
+  // 作用：仅在摄像头专注中使用三态在场结果，未知结果安全冻结。
+  // 原因：输入闲置不代表离开镜头，检测故障也不能推断为离席。
+  // 边界：不接收帧或身份数据；休息继续使用系统输入，手动暂停锁优先。
+  cameraSample(presence: Presence): TimerSnapshot {
+    if (this.storageFailed) return timerSnapshotSchema.parse(this.snapshotValue);
+    this.tick();
+    if (this.settingsValue.focusPresenceSource !== "camera") return this.emit();
+    if (this.screenLocked) {
+      this.invalidateCameraPresence();
+      return this.emit();
+    }
+    this.snapshotValue.automation.cameraPresence = presence;
+    this.snapshotValue.automation.cameraMonitoringAvailable = presence !== "unknown";
+    if (this.activePresenceSource() === "camera") this.reconcilePresence(presence, this.clock.now());
+    return this.emit();
+  }
+
+  private activePresenceSource(): PresenceSource {
+    return this.snapshotValue.round.kind === "focus" ? this.settingsValue.focusPresenceSource : "input";
+  }
+
+  private invalidateCameraPresence(): void {
+    this.snapshotValue.automation.cameraPresence = "unknown";
+    this.snapshotValue.automation.cameraMonitoringAvailable = false;
+  }
+
+  private reconcilePresence(presence: Presence, now: number, confirmedCountdownMs = 0): void {
+    if (this.snapshotValue.automation.manualPauseLocked || this.screenLocked) return;
+    const shouldRun = this.snapshotValue.round.kind === "focus" ? presence === "present" : presence === "away";
+    const conditionReason = presence === "unknown" ? "source-unavailable"
+      : this.snapshotValue.round.kind !== "focus" ? "break-condition"
+        : this.activePresenceSource() === "camera" ? "camera-away" : "input-away";
+    if (this.snapshotValue.status === "running" && !shouldRun) {
+      this.freeze(now);
+      this.snapshotValue.status = "auto-paused";
+      this.snapshotValue.automation.pauseReason = conditionReason;
+    } else if (this.snapshotValue.status === "auto-paused" && shouldRun) {
+      this.startRunning(now - confirmedCountdownMs);
+      if (confirmedCountdownMs > 0) this.tick();
+    } else if (this.snapshotValue.status === "auto-paused" && (this.activePresenceSource() === "camera"
+      || this.snapshotValue.automation.pauseReason === "source-unavailable"
+      || this.snapshotValue.automation.pauseReason === "core-recovery")) {
+      this.snapshotValue.automation.pauseReason = conditionReason;
+    }
+  }
+
   systemSuspend(): TimerSnapshot {
+    this.invalidateCameraPresence();
     this.pendingBreakCountdown = undefined;
     this.manualInputFallback = false;
     this.tick();
@@ -221,6 +282,7 @@ export class TimerEngine {
   // 原因：锁屏时系统输入仍可能报告在场，不能据此继续专注或开始休息。
   // 边界：门禁仅在当前进程内保存；idle 和手动暂停锁保持不变。
   systemLock(): TimerSnapshot {
+    this.invalidateCameraPresence();
     this.pendingBreakCountdown = undefined;
     this.manualInputFallback = false;
     this.tick();
@@ -236,7 +298,7 @@ export class TimerEngine {
   systemUnlock(): TimerSnapshot {
     this.screenLocked = false;
     if (this.snapshotValue.automation.pauseReason === "system-lock") {
-      this.snapshotValue.automation.pauseReason = !this.inputAvailable
+      this.snapshotValue.automation.pauseReason = this.activePresenceSource() === "camera" || !this.inputAvailable
         ? "source-unavailable"
         : this.snapshotValue.round.kind === "focus" ? "input-away" : "break-condition";
     }
@@ -301,7 +363,7 @@ export class TimerEngine {
       status: "idle",
       remainingMs: this.settingsValue.focusDurationSeconds * 1000,
       automation: {
-        activePresenceSource: "input",
+        activePresenceSource: this.settingsValue.focusPresenceSource,
         inputPresence: "unknown",
         cameraPresence: "unknown",
         inputMonitoringAvailable: true,
@@ -396,6 +458,7 @@ export class TimerEngine {
     if (nextCycle !== current.cycleNumber) this.activeCycleRounds = this.settingsValue.focusRoundsPerCycle;
     this.snapshotValue.activeCycleRounds = this.activeCycleRounds;
     this.snapshotValue.round = makeRound(nextKind, nextCycle, focusNumber, position, this.settingsValue);
+    this.snapshotValue.automation.activePresenceSource = this.activePresenceSource();
     this.snapshotValue.remainingMs = this.snapshotValue.round.totalDurationMs;
     this.snapshotValue.status = nextKind === "focus" ? "idle" : "auto-paused";
     this.snapshotValue.automation.manualPauseLocked = false;
@@ -416,6 +479,7 @@ export class TimerEngine {
   // 原因：输入采样能刷新界面，但不应在 SQLite 中留下采样记录或写入时间。
   // 边界：候选休息计时和监测状态只存在于内存，运行中的剩余时间仍定期保存。
   private emit(): TimerSnapshot {
+    this.snapshotValue.automation.activePresenceSource = this.activePresenceSource();
     this.snapshotValue.automation.inputPresence = this.inputPresence;
     const progressChanged = this.snapshotState() !== this.persistedState;
     const automation = JSON.stringify(this.snapshotValue.automation);

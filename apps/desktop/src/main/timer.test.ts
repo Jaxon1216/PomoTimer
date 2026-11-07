@@ -76,6 +76,124 @@ function observeIdle(engine: TimerEngine, clock: FakeClock, firstSecond: number,
 }
 
 describe("TimerEngine", () => {
+  describe("camera focus presence", () => {
+    it("uses camera presence for focus while input remains observable", () => {
+      const { engine, clock } = create();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      expect(engine.snapshot.automation.activePresenceSource).toBe("camera");
+      expect(engine.cameraSample("present").status).toBe("idle");
+      engine.command("start");
+      clock.advance(1_000);
+      expect(engine.inputSample(40).status).toBe("running");
+      expect(engine.inputSample(undefined, false).status).toBe("running");
+      const paused = engine.cameraSample("away");
+      expect(paused.status).toBe("auto-paused");
+      expect(paused.automation.pauseReason).toBe("camera-away");
+      expect(paused.automation.cameraMonitoringAvailable).toBe(true);
+      clock.advance(10_000);
+      expect(engine.inputSample(0).remainingMs).toBe(paused.remainingMs);
+      expect(engine.cameraSample("present").status).toBe("running");
+    });
+
+    it("safely pauses on unknown camera presence and rejects starting without a detected person", () => {
+      const { engine, clock } = create();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      expect(() => engine.command("start")).toThrow("摄像头");
+      engine.cameraSample("away");
+      expect(() => engine.command("start")).toThrow("摄像头");
+      engine.cameraSample("present");
+      engine.command("start");
+      clock.advance(1_000);
+      const unavailable = engine.cameraSample("unknown");
+      expect(unavailable.status).toBe("auto-paused");
+      expect(unavailable.automation.pauseReason).toBe("source-unavailable");
+      expect(unavailable.automation.cameraMonitoringAvailable).toBe(false);
+      expect(() => engine.command("resume")).toThrow("摄像头");
+      clock.advance(5_000);
+      expect(engine.inputSample(0).remainingMs).toBe(unavailable.remainingMs);
+      expect(engine.cameraSample("present").status).toBe("running");
+    });
+
+    it("requires a new source sample after switching during running focus", () => {
+      const { engine, clock } = create();
+      engine.inputSample(0);
+      engine.command("start");
+      clock.advance(1_000);
+      engine.applySettings({ focusPresenceSource: "camera" });
+      const waiting = engine.snapshot;
+      expect(waiting.status).toBe("auto-paused");
+      expect(waiting.automation.cameraPresence).toBe("unknown");
+      expect(engine.inputSample(0).status).toBe("auto-paused");
+      expect(engine.cameraSample("present").status).toBe("running");
+      engine.applySettings({ focusPresenceSource: "input" });
+      expect(engine.snapshot.status).toBe("auto-paused");
+      expect(engine.cameraSample("present").status).toBe("auto-paused");
+      expect(engine.inputSample(0).status).toBe("running");
+    });
+
+    it("keeps manual pause locked through presence and source changes", () => {
+      const { engine } = create();
+      engine.command("start");
+      engine.command("pause");
+      engine.applySettings({ focusPresenceSource: "camera" });
+      expect(engine.cameraSample("present").status).toBe("manual-paused");
+      expect(engine.cameraSample("unknown").automation.manualPauseLocked).toBe(true);
+      engine.applySettings({ focusPresenceSource: "input" });
+      expect(engine.inputSample(0).status).toBe("manual-paused");
+    });
+
+    it.each(["active", "desk"] as const)("keeps %s breaks on system input in camera mode", (defaultBreakMode) => {
+      const { engine } = create();
+      engine.applySettings({ focusPresenceSource: "camera", defaultBreakMode });
+      engine.command("next");
+      expect(engine.snapshot.automation.activePresenceSource).toBe("input");
+      expect(engine.cameraSample("away").status).toBe("auto-paused");
+      expect(engine.inputSample(40).status).toBe("running");
+      expect(engine.cameraSample("unknown").status).toBe("running");
+      expect(engine.inputSample(0).status).toBe("auto-paused");
+      engine.command("next");
+      expect(engine.snapshot.automation.activePresenceSource).toBe("camera");
+    });
+
+    it("restores a break with input as its active source even when focus uses camera", () => {
+      const { engine, store, clock } = create();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      engine.command("next");
+      const restored = new TimerEngine(store, clock);
+      expect(restored.snapshot.round.kind).toBe("short-break");
+      expect(restored.snapshot.automation.activePresenceSource).toBe("input");
+    });
+
+    it("does not interrupt a manually running break when changing the focus source", () => {
+      const { engine } = create();
+      engine.command("next");
+      engine.inputSample(undefined, false);
+      engine.command("resume");
+      engine.applySettings({ focusPresenceSource: "camera" });
+      expect(engine.snapshot.automation.activePresenceSource).toBe("input");
+      expect(engine.inputSample(undefined, false).status).toBe("running");
+    });
+
+    it.each(["suspend", "lock", "restart"] as const)("discards camera presence after %s", (interruption) => {
+      const first = create();
+      let engine = first.engine;
+      engine.applySettings({ focusPresenceSource: "camera" });
+      engine.cameraSample("present");
+      engine.command("start");
+      if (interruption === "suspend") engine.systemSuspend();
+      else if (interruption === "lock") {
+        engine.systemLock();
+        expect(engine.cameraSample("present").status).toBe("auto-paused");
+        engine.systemUnlock();
+      } else engine = new TimerEngine(first.store, first.clock);
+      expect(engine.snapshot.automation.cameraPresence).toBe("unknown");
+      expect(engine.snapshot.automation.cameraMonitoringAvailable).toBe(false);
+      expect(() => engine.command("resume")).toThrow("摄像头");
+      expect(engine.inputSample(0).status).toBe("auto-paused");
+      expect(engine.cameraSample("present").status).toBe("running");
+    });
+  });
+
   it("locks automatic recovery after a manual pause, including restart", () => {
     const first = create();
     first.engine.command("start");
