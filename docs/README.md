@@ -4,6 +4,7 @@
 
 | 要确认的问题 | 从哪里看 |
 | --- | --- |
+| 周期、阶段和完成量有什么区别？ | [领域词汇](../GLOSSARY.md)区分当前位置、已完成专注和休息准备期。 |
 | 用户会看到什么，怎样判断行为正确？ | [产品规格](./product-spec.md)含计时状态机、设置、界面、故障与验收场景。 |
 | 现在做什么，还有哪些真机检查？ | [路线图](./roadmap.md)区分当前阶段、发布门和后续阶段。 |
 | 谁持有计时状态，谁能读写数据库？ | [技术架构](./architecture.md)定义进程职责、时间来源和测试边界。 |
@@ -12,18 +13,20 @@
 | 为什么采用这样的节奏和隐私边界？ | [研究与决策](./research-and-decisions.md)记录证据、取舍和重新评估条件。 |
 | 如何给跨进程和状态机代码写注释？ | [代码注释约定](./code-commenting.md)含格式和示例。 |
 | 本地摄像头感知做了哪些验证？ | [摄像头开发验证](./camera-presence-validation.md)记录自动化、打包检查和真机边界。 |
+| 自动休息、空格和模式按钮这轮改了什么？ | [交互对齐记录](./sensing-interaction-design.md)与[修订验证](./sensing-interaction-validation.md)记录已确认规则和交付检查。 |
 | 字体和视觉参考从哪里来？ | [第三方声明](./third-party-notices.md)说明素材来源。 |
 
 固定原则：本地离线、macOS/Windows 首发、默认 `30/5/30/5/30/10`、输入只传递闲置秒数、不记录敏感输入或相机内容、完成专注才统计、失败检测不伪造可靠 presence。
 
 ## 产品截图
 
-以下截图取自 macOS 26.4.1（Apple Silicon）上的真实 Electron 测试窗口，使用独立临时数据目录。初始计时器、监控感知和设置图随本次开发更新；监控图使用 Chromium 模拟摄像头和真实本地模型，不采集物理摄像头。休息图和统计图保留此前的开发版截图。[历史截图对应提交 f90e522](https://github.com/Jaxon1216/PomoTimer/commit/f90e5228f04fa2105de747dfa5681daad079ad52)
+以下截图取自 macOS 26.4.1（Apple Silicon）上的真实 Electron 测试窗口，使用独立临时数据目录。初始计时器、监控感知、准备倒数和最小休息窗口随交互修订更新；监控图使用 Chromium 模拟摄像头和真实本地模型，不采集物理摄像头。其他截图保留此前开发版本，可在对应 Git 历史中复现。[较早截图对应提交 f90e522](https://github.com/Jaxon1216/PomoTimer/commit/f90e5228f04fa2105de747dfa5681daad079ad52)
 
 | 界面 | 可查看的状态 |
 | --- | --- |
 | [初始计时器](./assets/screenshots/timer-light.png) | 第一轮专注，等待用户开始。 |
 | [监控感知](./assets/screenshots/camera-monitor.png) | 无脸画面识别为离开，专注自动暂停；可直接切回触控。 |
+| [休息准备倒数](./assets/screenshots/break-preparation.png) | 无输入达到第 35 秒，提示 5 秒后开始，正式休息仍为完整 5 分钟。 |
 | [拖小窗口](./assets/screenshots/long-break-waiting-compact.png) | 220×240 小窗等待开始 10 分钟活动休息，测试的闲置阈值为 600 秒。 |
 | [最小窗口](./assets/screenshots/drag-minimum-interrupted-break.png) | 在 160×180 的窗口中，短休因输入暂停，可直接点击圆形播放按钮继续。 |
 | [设置](./assets/screenshots/settings-dark.png) | 切换到深色主题，开启常驻顶部。 |

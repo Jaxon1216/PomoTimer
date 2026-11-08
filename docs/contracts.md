@@ -39,17 +39,19 @@ type PauseReason = "none" | "input-away" | "camera-away" | "break-condition" | "
 interface TimerSnapshot {
   revision: number; emittedAt: string; status: TimerStatus; remainingMs: number;
   round: { kind: RoundKind; cycleNumber: number; positionInCycle: number; focusRoundNumber: number | null; breakMode: BreakMode | null; totalDurationMs: number };
-  automation: { activePresenceSource: "input" | "camera"; inputPresence: Presence; cameraPresence: Presence; inputMonitoringAvailable: boolean; cameraMonitoringAvailable: boolean; manualPauseLocked: boolean; pauseReason: PauseReason };
+  automation: { activePresenceSource: "input" | "camera"; inputPresence: Presence; cameraPresence: Presence; inputMonitoringAvailable: boolean; cameraMonitoringAvailable: boolean; manualPauseLocked: boolean; pauseReason: PauseReason; breakPreparation?: { remainingSeconds: number; countdown: boolean } | null };
 }
 ```
 
-默认设置为 `30/5/30/5/30/10`。专注使用 `focusPresenceSource` 选中的在场源；活动休息和桌前休息始终使用系统输入无输入条件，`activePresenceSource` 显示当前轮次实际采用的来源。自动暂停冻结 `remainingMs`；手动暂停会设置锁。休息轮在空闲确认阈值前最多 10 秒由 TimerEngine 以内存候选预记倒计时，达到阈值并进入 `running` 时才扣除已观测的候选时长；确认前快照不变更剩余时间，首次样本超过阈值不补历史。候选不进入 IPC 或 SQLite，输入回归、手动操作、检测失败、睡眠、重启、切轮或阈值改变时取消，最多抵扣当前休息剩余时长。
+默认设置为 `30/5/30/5/30/10`。专注和活动休息使用 `focusPresenceSource` 选中的来源；桌前休息始终使用系统输入。`activePresenceSource` 表示当前轮次实际采用的来源。触控专注的首次与下一轮由用户开始，监控专注的有效 `present` 可自动开始 `idle` 或恢复自动暂停。专注中手动暂停设置锁；休息中点击暂停不建立永久锁，后续有效休息条件仍可自动开始或恢复。
+
+`automation.breakPreparation` 是 Main 从当前有效输入样本推导的休息准备状态。`remainingSeconds` 是大于零的整数，`countdown` 在剩余不超过 10 秒时为 `true`；仅在采用输入源的休息轮等待自动开始/恢复时提供。初始、样本故障、锁屏/睡眠或采用摄像头时为 `null`。字段可省略以兼容旧快照，当前 Engine 输出显式对象或 `null`。Renderer 在默认准备期前 30 秒显示“无输入 40 秒开始休息”，最后 10 秒显示 `10…1`；中途输入会重置准备。达到阈值才开始正式休息，准备期不扣减 `remainingMs`，也不回填已过去的休息时间。该字段只进入实时 IPC，不进入 SQLite。
 
 ## 3. 设置生效
 
 设置范围与产品规格一致：专注 300–7200 秒、短休 60–3600 秒、长休 60–5400 秒、周期 1–8 轮、输入阈值 10–600 秒。主题和常驻顶部立即生效；时长在下一轮同类型轮次生效，周期轮数在下一周期生效，休息模式在下一轮休息生效，输入阈值在下一采样生效。
 
-`focusPresenceSource: "input" | "camera"` 默认 `input`。改变来源立即清除旧摄像头在场状态；若当前为专注，也取消临时手动回退并将运行中的专注安全暂停，等待新源样本。不重置计时、不改变休息策略、不解除手动暂停锁。监控专注只在有效 `present` 时允许显式开始/继续。摄像头故障由 Main 保存回退后的 `input` 设置，并通过 `settings.changed` 通知 Renderer；用户重新选择监控才重试。
+`focusPresenceSource: "input" | "camera"` 默认 `input`，它同时选择专注和活动休息的感知源。改变来源立即清除旧摄像头在场状态；当前轮次实际来源变化时，取消临时手动回退、清空准备状态并安全暂停活动轮次，等待新源样本。不重置计时，不解除专注的手动暂停锁；桌前休息的输入规则不因该设置变化而改变。监控专注只在有效 `present` 时开始/继续，监控活动休息只在有效 `away` 时开始/继续。摄像头故障由 Main 保存回退后的 `input` 设置，并通过 `settings.changed` 通知 Renderer；用户重新选择监控才重试。
 
 ## 4. 事件
 
@@ -72,7 +74,7 @@ Main 每 500ms 广播权威快照。命令、输入/摄像头采样、轮次变�
 
 保留并兼容既有表：`schema_migrations`、`settings`、单行 `timer_snapshot`、`completed_focus_sessions`。只有完整结束的 focus 写入 `completed_focus_sessions`。完成记录使用由周期和专注轮次生成的稳定 ID，`INSERT OR IGNORE` 防止重试重复计数。统计按 `local_date` 聚合今日、本周和最近 52 周数据。
 
-`TimerSnapshot` 是运行时 IPC 契约。闲置秒数只在 Main 内存中使用，Renderer 通过实时快照读取推断出的在场状态。摄像头帧只在 Renderer 瞬时处理，三态和代次只在内存中使用。SQLite 的计时检查点只保存恢复轮次所需的数据，普通检查点与完成专注的事务使用同一写入格式，不保存 `automation`、presence、摄像头代次或检测历史。设置中可保存选中的专注源，沿用版本 1 设置格式，不改动已发布的数据库迁移。重启后，两种在场状态均为 `unknown`，直到收到有效样本。升级时，可读取的旧检查点转换为新格式，设置和完成记录继续保留。既有备份和故障恢复归档按原样保存，可能包含旧版本写入的字段。
+`TimerSnapshot` 是运行时 IPC 契约。闲置秒数只在 Main 内存中使用，Renderer 通过实时快照读取推断出的在场状态。摄像头帧只在 Renderer 瞬时处理，三态和代次只在内存中使用。SQLite 的计时检查点只保存恢复轮次所需的数据，普通检查点与完成专注的事务使用同一写入格式，不保存 `automation`、presence、休息准备倒数、摄像头代次或检测历史。设置中可保存选中的专注源，沿用版本 1 设置格式，不改动已发布的数据库迁移。重启后，两种在场状态均为 `unknown`，休息准备状态为 `null`，直到收到有效样本。旧检查点中的 `manual-paused` 休息轮转为自动等待，剩余时间保持不变；专注的手动暂停锁继续保留。升级时，可读取的旧检查点转换为新格式，设置和完成记录继续保留。既有备份和故障恢复归档按原样保存，可能包含旧版本写入的字段。
 
 Store 每次打开数据库都会尝试将 WAL 合入主文件并截断。若外部读取连接仍占用旧页，逻辑检查点已完成转换，旧页清理会在下次打开时重试。此时复制的原始文件也可能包含旧版本的数据。
 

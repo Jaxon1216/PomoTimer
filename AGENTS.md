@@ -2,7 +2,7 @@
 
 ## Product scope
 
-Pomodoro Timer is a local-first Electron desktop focus timer for macOS and Windows. Phase 1 includes React/TypeScript UI, a main-process timer core, system-input monitoring, configurable `30/5/30/5/30/10` cycles, active/desk breaks, local statistics, heatmap, tray controls, notifications, compact layout, and light/dark/system themes. Phase 2 adds opt-in local camera presence for focus rounds; system input remains the default and controls both break modes. Phase 3 may add manual standing sessions.
+Pomodoro Timer is a local-first Electron desktop focus timer for macOS and Windows. Phase 1 includes React/TypeScript UI, a main-process timer core, system-input monitoring, configurable `30/5/30/5/30/10` cycles, active/desk breaks, local statistics, heatmap, tray controls, notifications, compact layout, and light/dark/system themes. Phase 2 adds opt-in local camera presence for focus and active-break rounds; system input remains the default and always controls desk breaks. Phase 3 may add manual standing sessions.
 
 Do not add accounts, cloud sync, telemetry, calendar scheduling, identity recognition, medical claims, Linux support, strict camera anti-spoofing, HTTP/WebSocket services, or child-process cores without an explicit scope change.
 
@@ -28,10 +28,10 @@ scripts/        development, verification, packaging, and release helpers
 - Validate every IPC input and every event payload with Zod; reject unknown commands and fields.
 - System input is represented only by seconds since the last system-wide input event. Never collect key values, mouse coordinates, active windows, screen contents, embeddings, or identity data. In opt-in camera mode, Renderer may process transient frames locally to derive presence, but must never retain, transmit, log, or persist frames, face boxes, or device labels.
 - Camera permission is restricted to the main window's trusted main frame while camera mode is selected. Deny microphone and unrelated permissions. Camera reports contain only presence and a Main-issued generation; stale or failed streams safely fall back to input with a visible reason.
-- Keep idle samples and derived presence in memory. Recover timer progress from SQLite and determine presence from a fresh sample after launch. Test checkpoint changes with a real database.
+- Keep idle samples, break-preparation countdowns, and derived presence in memory. Recover timer progress from SQLite and determine presence from a fresh sample after launch. Test checkpoint changes with a real database.
 - Phase 1 input monitoring uses Electron `powerMonitor.getSystemIdleTime()` on macOS and Windows. Failure is visible, becomes `unknown`, and safely pauses an active round; idle/manual-paused rounds are not started or overridden.
-- Automatic pause never decrements time. Manual pause locks automatic resume until the user presses continue.
-- Sleep and restart turn an active round into `auto-paused`; offline time never counts.
+- Automatic pause never decrements time. Manual pause locks automatic resume only during focus, until the user presses continue. Breaks remain eligible for automatic start/resume whether or not the user pressed pause.
+- Sleep and restart turn an active round into `auto-paused`; offline time never counts. Normalize legacy manually paused breaks to automatic waiting without changing their remaining time; preserve focus pause locks.
 
 ## Engineering rules
 
