@@ -13,6 +13,7 @@ import {
   SkipForward,
   Sun,
   TimerReset,
+  Touchpad,
 } from "lucide-react";
 import type {
   CoreEvent,
@@ -35,10 +36,28 @@ const labels = {
   "long-break": "长休",
 } as const;
 
-function statusText(snapshot: TimerSnapshot): string {
-  if (snapshot.status === "idle") return "准备开始";
+function statusText(snapshot: TimerSnapshot, settings: Settings): string {
   if (snapshot.status === "running") return snapshot.round.kind === "focus" ? "专注中" : "休息中";
-  if (snapshot.status === "manual-paused") return "手动暂停 · 点击继续";
+  const isFocus = snapshot.round.kind === "focus";
+  if (isFocus && snapshot.automation.manualPauseLocked) return "手动暂停 · 点击继续";
+  const waitingBreak = !isFocus && (snapshot.status === "idle" || snapshot.status === "manual-paused"
+    || snapshot.automation.pauseReason === "break-condition");
+  if (waitingBreak) {
+    const action = snapshot.remainingMs === snapshot.round.totalDurationMs ? "开始" : "继续";
+    if (snapshot.automation.activePresenceSource === "camera") {
+      if (!snapshot.automation.cameraMonitoringAvailable) return "等待摄像头检测";
+      return `等待离席 · 将自动${action}`;
+    }
+    if (!snapshot.automation.inputMonitoringAvailable) return "输入检测不可用";
+    const preparation = snapshot.automation.breakPreparation;
+    return preparation?.countdown
+      ? `${preparation.remainingSeconds} 秒后${action}休息`
+      : `无输入 ${settings.inputIdleThresholdSeconds} 秒${action}休息`;
+  }
+  if (snapshot.status === "idle") {
+    if (snapshot.automation.activePresenceSource === "camera") return "等待摄像头检测 · 将自动开始";
+    return "准备开始";
+  }
 
   switch (snapshot.automation.pauseReason) {
     case "input-away":
@@ -46,12 +65,7 @@ function statusText(snapshot: TimerSnapshot): string {
     case "camera-away":
       return "未检测到在场 · 自动暂停";
     case "break-condition": {
-      if (snapshot.remainingMs < snapshot.round.totalDurationMs && snapshot.automation.inputPresence === "present") {
-        return "有输入 · 休息暂停";
-      }
-      const condition = snapshot.round.breakMode === "desk" ? "等待无输入" : "等待离席";
-      const action = snapshot.remainingMs === snapshot.round.totalDurationMs ? "开始" : "继续";
-      return `${condition} · 将自动${action}`;
+      return "等待休息条件";
     }
     case "source-unavailable":
       return snapshot.automation.activePresenceSource === "camera" ? "等待摄像头检测" : "输入检测不可用";
@@ -73,18 +87,23 @@ function IconButton({
   children,
   onClick,
   className = "",
+  title = label,
+  disabled = false,
 }: {
   label: string;
   children: ReactNode;
   onClick: () => void;
   className?: string;
+  title?: string;
+  disabled?: boolean;
 }): ReactElement {
   return (
     <button
       type="button"
       className={`iconButton ${className}`}
       aria-label={label}
-      title={label}
+      title={title}
+      disabled={disabled}
       onClick={onClick}
     >
       {children}
@@ -134,9 +153,10 @@ function TimerView({
   const progress = 1 - snapshot.remainingMs / snapshot.round.totalDurationMs;
   const remaining = formatDuration(snapshot.remainingMs);
   const circumference = 2 * Math.PI * 108;
+  const currentStatus = statusText(snapshot, settings);
   const monitorStatus = snapshot.automation.activePresenceSource === "camera"
     ? snapshot.automation.cameraMonitoringAvailable
-      ? `监控感知 · ${snapshot.automation.cameraPresence === "present" ? "在场" : "离开"}`
+      ? `监控感知 · ${snapshot.automation.cameraPresence === "present" ? "在场" : snapshot.automation.cameraPresence === "away" ? "离开" : "待检测"}`
       : "监控感知 · 正在启动摄像头"
     : snapshot.automation.inputMonitoringAvailable
     ? `系统输入检测 · ${settings.inputIdleThresholdSeconds} 秒阈值`
@@ -144,7 +164,30 @@ function TimerView({
       ? "已暂停 · 可手动继续"
       : "输入检测不可用 · 手动控制";
   const rounds = snapshot.activeCycleRounds ?? settings.focusRoundsPerCycle;
-  const completedFocus = snapshot.round.focusRoundNumber ?? Math.ceil(snapshot.round.positionInCycle / 2);
+  const focusRoundNumber = snapshot.round.focusRoundNumber ?? Math.ceil(snapshot.round.positionInCycle / 2);
+  const roundCount = snapshot.round.kind === "focus" ? `第 ${focusRoundNumber}/${rounds} 轮专注`
+    : `第 ${snapshot.round.kind === "long-break" ? rounds : focusRoundNumber} 轮后的${labels[snapshot.round.kind]}`;
+  const sequence = Array.from({ length: rounds * 2 }, (_, index): { kind: TimerSnapshot["round"]["kind"]; seconds: number; description: string } => {
+    const kind = index % 2 === 0 ? "focus" : index === rounds * 2 - 1 ? "long-break" : "short-break";
+    const plannedSeconds = kind === "focus" ? settings.focusDurationSeconds
+      : kind === "short-break" ? settings.shortBreakDurationSeconds : settings.longBreakDurationSeconds;
+    const seconds = index === snapshot.round.positionInCycle - 1 ? snapshot.round.totalDurationMs / 1000 : plannedSeconds;
+    return { kind, seconds, description: `${labels[kind]} ${Number((seconds / 60).toFixed(2))} 分钟` };
+  });
+
+  useEffect(() => {
+    const toggleWithSpace = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.code !== "Space" || event.repeat || event.isComposing || event.keyCode === 229
+        || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || menuOpen) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const primaryButton = target?.closest(".timerControls .primary");
+      if (!primaryButton && target?.closest("button, input, select, textarea, a[href], summary, [contenteditable]:not([contenteditable=false]), [role=button], [role=menu], [role=menuitem], [role=slider], [role=checkbox], [role=radio], [role=switch], [role=combobox], [role=textbox], [tabindex]:not([tabindex='-1']), audio[controls], video[controls]")) return;
+      event.preventDefault();
+      onCommand(action.command);
+    };
+    window.addEventListener("keydown", toggleWithSpace);
+    return () => window.removeEventListener("keydown", toggleWithSpace);
+  }, [action.command, menuOpen, onCommand]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -187,6 +230,14 @@ function TimerView({
           POMO<span>DOT</span>
         </span>
         <div className="titleActions">
+          <IconButton className="presenceModeButton" disabled={modeChanging}
+            label={`感知模式：${settings.focusPresenceSource === "input" ? "触控" : "监控"}，切换为${settings.focusPresenceSource === "input" ? "监控" : "触控"}`}
+            title={settings.focusPresenceSource === "input"
+              ? "当前：触控感知。使用系统输入（键盘、鼠标、触控板）；点击切换为监控感知。"
+              : "当前：监控感知。专注和活动休息使用摄像头，桌前休息使用系统输入；影像仅在本机处理，不保存或上传。点击切换为触控感知。"}
+            onClick={() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input")}>
+            {settings.focusPresenceSource === "input" ? <Touchpad size={16} /> : <Camera size={16} />}
+          </IconButton>
           <IconButton label="打开统计" onClick={() => onView("stats")}>
             <BarChart3 size={16} />
           </IconButton>
@@ -212,24 +263,20 @@ function TimerView({
         <div className="timerDetails">
           <div className="roundMeta">
             <h1 id="round-title">{labels[snapshot.round.kind]}</h1>
-            {snapshot.round.kind === "focus" ? <button type="button" className="presenceSwitch" disabled={modeChanging}
-              aria-label={`感知模式：${settings.focusPresenceSource === "input" ? "触控" : "监控"}，切换为${settings.focusPresenceSource === "input" ? "监控" : "触控"}`}
-              title="触控使用系统输入；监控使用摄像头，仅在本机判断在场，不保存或上传影像。" onClick={() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input")}>
-              {settings.focusPresenceSource === "camera" && <Camera size={12} />}{settings.focusPresenceSource === "input" ? "触控感知" : "监控感知"}
-            </button> : <span className="breakMode">{snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}</span>}
+            {snapshot.round.kind !== "focus" && <span className="breakMode">{snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}</span>}
           </div>
           <div className="timerStatus" aria-live="polite">
-            <div className={`statePill state-${snapshot.status}`} title={statusText(snapshot)}>
+            <div className={`statePill state-${snapshot.status}`} title={currentStatus}>
               <span className="stateDot" aria-hidden="true" />
-              <span>{statusText(snapshot)}</span>
+              <span>{currentStatus}</span>
             </div>
-            <p className="monitorStatus" data-available={snapshot.automation.inputMonitoringAvailable}>{monitorStatus}</p>
+            <p className="monitorStatus" data-available={snapshot.automation.activePresenceSource === "camera" ? snapshot.automation.cameraMonitoringAvailable : snapshot.automation.inputMonitoringAvailable}>{monitorStatus}</p>
           </div>
         </div>
         <div className="dialSlot">
           <div
             className="timerDial"
-            aria-label={`${labels[snapshot.round.kind]}，剩余 ${formatDuration(snapshot.remainingMs)}，${statusText(snapshot)}`}
+            aria-label={`${labels[snapshot.round.kind]}，剩余 ${formatDuration(snapshot.remainingMs)}，${currentStatus}`}
           >
             <svg viewBox="0 0 230 230" aria-hidden="true">
               <circle className="dialTrack" cx="115" cy="115" r="108" />
@@ -263,12 +310,13 @@ function TimerView({
       </section>
 
       <footer className="timerFooter">
-        <div className="roundSequence" role="img" aria-label={`第 ${snapshot.round.positionInCycle} / ${rounds * 2} 阶段`}>
-          {Array.from({ length: rounds * 2 }, (_, index) => (
-            <span key={index} className={index === snapshot.round.positionInCycle - 1 ? "current" : index < snapshot.round.positionInCycle - 1 ? "finished" : ""} />
+        <div className="roundSequence" role="img" aria-label={`第 ${snapshot.round.positionInCycle} / ${rounds * 2} 阶段；${sequence.map((stage) => stage.description).join(" → ")}`}>
+          {sequence.map((stage, index) => (
+            <span key={index} style={{ flexGrow: stage.seconds }} title={`第 ${index + 1} 阶段 · ${labels[stage.kind]} · ${Number((stage.seconds / 60).toFixed(2))} 分钟`}
+              className={index === snapshot.round.positionInCycle - 1 ? "current" : index < snapshot.round.positionInCycle - 1 ? "finished" : ""} />
           ))}
         </div>
-        <span className="roundCount">本周期 {completedFocus} / {rounds}</span>
+        <span className="roundCount" title={roundCount}>{roundCount}</span>
       </footer>
     </main>
   );
@@ -408,12 +456,12 @@ function SettingsView({
 
           <section className="settingsSection">
             <h2>自动化</h2>
-            <div className="segmented" role="group" aria-label="专注感知模式">
+            <div className="segmented" role="group" aria-label="感知模式">
               <span>感知模式</span>
               <button type="button" disabled={modeChanging} aria-pressed={settings.focusPresenceSource === "input"} onClick={() => onModeChange("input")}>触控</button>
               <button type="button" disabled={modeChanging} aria-pressed={settings.focusPresenceSource === "camera"} onClick={() => onModeChange("camera")}>监控</button>
             </div>
-            <p className="infoNote">立即生效。监控会请求摄像头权限，只在本机判断是否在场，不保存或上传影像。休息仍根据系统输入计时。切回触控会关闭摄像头。</p>
+            <p className="infoNote">立即生效。监控会请求摄像头权限：专注在场计时，活动休息离席计时；桌前休息根据系统输入计时。画面只在本机处理，不保存或上传。切回触控会关闭摄像头。</p>
             {numberInput("inputIdleThresholdSeconds")}
             <div className="segmented">
               <span>默认休息模式</span>

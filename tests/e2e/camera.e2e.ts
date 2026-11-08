@@ -147,7 +147,7 @@ test("keeps camera focus authoritative across idle samples, manual pause and a n
   const original = await cameraState(cameraWindow);
   expect(original.enabled).toBe(true);
   await report(cameraWindow, "present", original.generation);
-  await cameraWindow.getByRole("button", { name: "开始计时" }).click();
+  await expect(cameraWindow.getByRole("button", { name: "暂停计时" })).toBeVisible();
   await application.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 600; });
   await expect.poll(async () => (await snapshot(cameraWindow)).automation.inputPresence).toBe("away");
   expect((await snapshot(cameraWindow)).status).toBe("running");
@@ -187,7 +187,7 @@ test("falls back visibly when a previously live camera stops sending heartbeats"
   await cameraWindow.getByRole("button", { name: "感知模式：触控，切换为监控" }).click();
   const original = await cameraState(cameraWindow);
   await report(cameraWindow, "present", original.generation);
-  await cameraWindow.getByRole("button", { name: "开始计时" }).click();
+  await expect(cameraWindow.getByRole("button", { name: "暂停计时" })).toBeVisible();
   await expect(cameraWindow.getByRole("alert")).toContainText("响应超时", { timeout: 8_000 });
   await expect(cameraWindow.getByRole("button", { name: "感知模式：触控，切换为监控" })).toBeVisible();
   expect(await cameraState(cameraWindow)).toMatchObject({ enabled: false });
@@ -201,7 +201,7 @@ test("invalidates camera reports across a renderer reload", async ({ cameraWindo
   await cameraWindow.getByRole("button", { name: "感知模式：触控，切换为监控" }).click();
   const original = await cameraState(cameraWindow);
   await report(cameraWindow, "present", original.generation);
-  await cameraWindow.getByRole("button", { name: "开始计时" }).click();
+  await expect(cameraWindow.getByRole("button", { name: "暂停计时" })).toBeVisible();
   await cameraWindow.reload();
   await expect(cameraWindow.getByRole("button", { name: "感知模式：监控，切换为触控" })).toBeVisible();
   const restored = await cameraState(cameraWindow);
@@ -211,4 +211,36 @@ test("invalidates camera reports across a renderer reload", async ({ cameraWindo
   expect((await snapshot(cameraWindow)).status).toBe("auto-paused");
   expect((await snapshot(cameraWindow)).automation.cameraPresence).toBe("unknown");
   expect((await report(cameraWindow, "present", restored.generation)).status).toBe("running");
+});
+
+test("starts camera focus and active rest automatically while desk rest keeps the input threshold", async ({ application, cameraWindow }) => {
+  await probeCamera(cameraWindow, "pending");
+  const switchMode = cameraWindow.getByRole("button", { name: "感知模式：触控，切换为监控" });
+  const order = await cameraWindow.locator(".titleActions > button, .titleActions > .timerMenuContainer > button").evaluateAll((buttons) =>
+    buttons.map((button) => button.getAttribute("aria-label")));
+  expect(order).toEqual(["感知模式：触控，切换为监控", "打开统计", "更多操作"]);
+  await switchMode.click();
+  const session = await cameraState(cameraWindow);
+  expect((await report(cameraWindow, "present", session.generation)).status).toBe("running");
+  await cameraWindow.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
+  await cameraWindow.keyboard.press("Space");
+  expect((await snapshot(cameraWindow)).status).toBe("manual-paused");
+  expect((await report(cameraWindow, "present", session.generation)).status).toBe("manual-paused");
+  await cameraWindow.keyboard.press("Space");
+  expect((await snapshot(cameraWindow)).status).toBe("running");
+  await cameraWindow.evaluate(() => window.pomodoro.command("next"));
+  expect((await snapshot(cameraWindow)).automation.activePresenceSource).toBe("camera");
+  expect((await report(cameraWindow, "present", session.generation)).status).toBe("auto-paused");
+  expect((await report(cameraWindow, "away", session.generation)).status).toBe("running");
+  const paused = await cameraWindow.evaluate(() => window.pomodoro.command("pause"));
+  expect(paused.automation.manualPauseLocked).toBe(false);
+  expect((await report(cameraWindow, "away", session.generation)).status).toBe("running");
+  await cameraWindow.evaluate(() => window.pomodoro.command("next"));
+  expect((await report(cameraWindow, "present", session.generation)).status).toBe("running");
+  await cameraWindow.evaluate(() => window.pomodoro.updateSettings({ defaultBreakMode: "desk" }));
+  await cameraWindow.evaluate(() => window.pomodoro.command("next"));
+  expect((await snapshot(cameraWindow)).automation.activePresenceSource).toBe("input");
+  expect((await report(cameraWindow, "away", session.generation)).status).toBe("auto-paused");
+  await application.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 40; });
+  await expect.poll(async () => (await snapshot(cameraWindow)).status).toBe("running");
 });

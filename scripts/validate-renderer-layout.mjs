@@ -149,7 +149,19 @@ try {
       assert.ok(Math.abs(result.topInset - result.bottomInset) <= 2, `${width}x${height}: compact group must be vertically centered`);
     }
     assert.match(result.text, /^\d{2,3}:\d{2}$/);
-    for (const name of ["打开统计", "更多操作", "开始计时", "跳到下一轮"]) {
+    const header = await page.locator(".titleActions .iconButton").evaluateAll((buttons) => buttons.map((button) => {
+      const rect = button.getBoundingClientRect();
+      return { label: button.getAttribute("aria-label"), left: rect.left, right: rect.right };
+    }));
+    assert.equal(header.length, 3, `${width}x${height}: all header actions remain visible`);
+    assert.ok(header[0].left >= 86 && header[0].right <= header[1].left && header[1].right <= header[2].left,
+      `${width}x${height}: sensing mode precedes statistics without overlapping native controls`);
+    if (width >= 320 && height >= 300) {
+      const segmentWidths = await page.locator(".roundSequence span").evaluateAll((segments) => segments.map((segment) => segment.getBoundingClientRect().width));
+      assert.ok(Math.abs(segmentWidths[0] / segmentWidths[1] - 6) < 0.1, "focus width reflects thirty versus five minutes");
+      assert.ok(Math.abs(segmentWidths[5] / segmentWidths[1] - 2) < 0.1, "long rest width reflects ten versus five minutes");
+    }
+    for (const name of ["感知模式：触控，切换为监控", "打开统计", "更多操作", "开始计时", "跳到下一轮"]) {
       await page.getByRole("button", { name, exact: true }).click({ trial: true });
     }
     await page.screenshot({ path: join(output, `timer-${width}x${height}.png`) });
