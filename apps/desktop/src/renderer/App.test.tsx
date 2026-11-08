@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { formatDuration } from "./time";
+import { startCameraPresence } from "./camera-presence";
+vi.mock("./camera-presence", () => ({ startCameraPresence: vi.fn(() => vi.fn()) }));
 import type {
   Capabilities,
   CoreEvent,
@@ -142,6 +144,8 @@ describe("App", () => {
       getSnapshot: vi.fn().mockResolvedValue(snapshot),
       getSettings: vi.fn().mockResolvedValue(settings),
       getCapabilities: vi.fn().mockResolvedValue(capabilities),
+      getCameraState: vi.fn().mockResolvedValue({ enabled: false, generation: 0 }),
+      reportCameraPresence: vi.fn().mockResolvedValue(snapshot),
       getStatistics: vi.fn().mockResolvedValue({
         generatedAt: "2026-09-08T09:00:00.000Z",
         today: { localDate: "2026-09-08", completedFocusMinutes: 0, completedFocusRounds: 0 },
@@ -173,6 +177,208 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "跳到下一轮" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
     expect(screen.getByRole("menuitem", { name: "重新开始当前轮次" })).toBeEnabled();
+  });
+
+  it("keeps camera off by default and switches modes only after an explicit choice", async () => {
+    const start = vi.mocked(startCameraPresence);
+    start.mockClear();
+    vi.mocked(window.pomodoro.updateSettings).mockResolvedValue({ ...settings, focusPresenceSource: "camera" });
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "感知模式：触控，切换为监控" }));
+    await waitFor(() => expect(window.pomodoro.updateSettings).toHaveBeenCalledWith({ focusPresenceSource: "camera" }));
+    await act(async () => eventListener?.({ type: "camera.state", state: { enabled: true, generation: 2 } }));
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "感知模式：监控，切换为触控" })).toBeEnabled();
+    const [report] = start.mock.calls[0]!;
+    await act(async () => { await report("present"); });
+    expect(window.pomodoro.reportCameraPresence).toHaveBeenCalledWith("present", 2);
+    const stop = start.mock.results[0]!.value;
+    await act(async () => {
+      eventListener?.({ type: "settings.changed", settings });
+      eventListener?.({ type: "camera.state", state: { enabled: false, generation: 3 } });
+    });
+    expect(stop).toHaveBeenCalledOnce();
+    await act(async () => { await report("away"); });
+    expect(window.pomodoro.reportCameraPresence).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts the sensing icon before statistics and more, including during a break", async () => {
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue(waitingBreakSnapshot);
+    render(<App />);
+    await screen.findByRole("heading", { name: "短休" });
+    const mode = screen.getByRole("button", { name: "感知模式：触控，切换为监控" });
+    const header = screen.getByRole("banner");
+    expect(Array.from(header.querySelectorAll("button"))).toEqual([
+      mode, screen.getByRole("button", { name: "打开统计" }), screen.getByRole("button", { name: "更多操作" }),
+    ]);
+    expect(mode.textContent).toBe("");
+    expect(mode).toHaveAttribute("title", expect.stringContaining("当前：触控感知"));
+    expect(mode).toHaveAttribute("title", expect.stringContaining("系统输入"));
+    expect(document.querySelector(".roundMeta button")).not.toBeInTheDocument();
+    vi.mocked(window.pomodoro.updateSettings).mockResolvedValue({ ...settings, focusPresenceSource: "camera" });
+    fireEvent.click(mode);
+    await waitFor(() => expect(window.pomodoro.updateSettings).toHaveBeenCalledWith({ focusPresenceSource: "camera" }));
+    expect(screen.getByRole("button", { name: "感知模式：监控，切换为触控" })).toHaveAttribute("title", expect.stringContaining("摄像头"));
+  });
+
+  it("uses Space to start, pause, and continue only once per press", async () => {
+    const paused: TimerSnapshot = {
+      ...runningSnapshot, status: "manual-paused",
+      automation: { ...runningSnapshot.automation, manualPauseLocked: true },
+    };
+    vi.mocked(window.pomodoro.command).mockResolvedValueOnce(runningSnapshot).mockResolvedValueOnce(paused).mockResolvedValueOnce(runningSnapshot);
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    expect(fireEvent.keyDown(document.body, { code: "Space", key: " " })).toBe(false);
+    await screen.findByRole("button", { name: "暂停计时" });
+    expect(fireEvent.keyDown(screen.getByRole("button", { name: "暂停计时" }), { code: "Space", key: " " })).toBe(false);
+    await screen.findByRole("button", { name: "继续计时" });
+    fireEvent.keyDown(document.body, { code: "Space", key: " " });
+    await screen.findByRole("button", { name: "暂停计时" });
+    expect(vi.mocked(window.pomodoro.command).mock.calls).toEqual([["start"], ["pause"], ["resume"]]);
+  });
+
+  it.each([
+    { repeat: true }, { altKey: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { isComposing: true }, { keyCode: 229 },
+  ])("ignores Space with repeat, modifiers, or composition: %j", async (options) => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    expect(fireEvent.keyDown(document.body, { code: "Space", key: " ", ...options })).toBe(true);
+    expect(window.pomodoro.command).not.toHaveBeenCalled();
+  });
+
+  it("leaves Space to interactive controls and an open menu", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    for (const button of [screen.getByRole("button", { name: "打开统计" }), screen.getByRole("button", { name: "更多操作" }), screen.getByRole("button", { name: "跳到下一轮" })]) {
+      expect(fireEvent.keyDown(button, { code: "Space", key: " " })).toBe(true);
+    }
+    const host = document.createElement("div");
+    host.innerHTML = '<input /><select><option>Choice</option></select><textarea></textarea><div contenteditable="true"><span>edit</span></div><a href="#">link</a><div role="slider" tabindex="0"></div>';
+    document.body.append(host);
+    for (const target of host.querySelectorAll("input, select, textarea, [contenteditable] span, a, [role=slider]")) {
+      expect(fireEvent.keyDown(target, { code: "Space", key: " " })).toBe(true);
+    }
+    host.remove();
+    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(fireEvent.keyDown(screen.getByRole("menuitem", { name: "重新开始当前轮次" }), { code: "Space", key: " " })).toBe(true);
+    expect(fireEvent.keyDown(document.body, { code: "Space", key: " " })).toBe(true);
+    expect(window.pomodoro.command).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept Space in settings or statistics", async () => {
+    render(<App />);
+    await openSettings();
+    expect(fireEvent.keyDown(document.body, { code: "Space", key: " " })).toBe(true);
+    expect(fireEvent.keyDown(screen.getByRole("spinbutton", { name: "专注时长" }), { code: "Space", key: " " })).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "返回计时器" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开统计" }));
+    await screen.findByRole("heading", { name: "统计" });
+    expect(fireEvent.keyDown(document.body, { code: "Space", key: " " })).toBe(true);
+    expect(window.pomodoro.command).not.toHaveBeenCalled();
+  });
+
+  it("shows the full input preparation threshold until the final ten seconds, then follows Core without losing break time", async () => {
+    const prepare = (remainingSeconds: number, countdown: boolean) => ({
+      ...waitingBreakSnapshot,
+      automation: { ...waitingBreakSnapshot.automation, breakPreparation: { remainingSeconds, countdown } },
+    });
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue(prepare(40, false));
+    render(<App />);
+    expect(await screen.findByText("无输入 40 秒开始休息")).toBeInTheDocument();
+    act(() => eventListener?.({ type: "timer.snapshot", snapshot: prepare(11, false) }));
+    expect(screen.getByText("无输入 40 秒开始休息")).toBeInTheDocument();
+    for (const seconds of [10, 9, 1]) {
+      act(() => eventListener?.({ type: "timer.snapshot", snapshot: prepare(seconds, true) }));
+      expect(screen.getByText(`${seconds} 秒后开始休息`)).toBeInTheDocument();
+    }
+    act(() => eventListener?.({ type: "timer.snapshot", snapshot: prepare(40, false) }));
+    expect(screen.getByText("无输入 40 秒开始休息")).toBeInTheDocument();
+    act(() => eventListener?.({ type: "timer.snapshot", snapshot: {
+      ...waitingBreakSnapshot, status: "running",
+      automation: { ...waitingBreakSnapshot.automation, inputPresence: "away", pauseReason: "none" },
+    } }));
+    expect(screen.getByText("05:00")).toBeInTheDocument();
+    expect(screen.getByText("休息中")).toBeInTheDocument();
+    expect(window.pomodoro.command).not.toHaveBeenCalled();
+  });
+
+  it("uses camera presence rather than the input threshold for an active camera break", async () => {
+    window.pomodoro.getSettings = vi.fn().mockResolvedValue({ ...settings, focusPresenceSource: "camera" });
+    window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({ ...waitingBreakSnapshot, automation: {
+      ...waitingBreakSnapshot.automation, activePresenceSource: "camera", cameraPresence: "present", cameraMonitoringAvailable: true,
+    } });
+    render(<App />);
+    expect(await screen.findByText("等待离席 · 将自动开始")).toBeInTheDocument();
+    expect(screen.queryByText("无输入 40 秒开始休息")).not.toBeInTheDocument();
+  });
+
+  it("explains manual input startup and automatic camera startup while preserving its pause lock", async () => {
+    render(<App />);
+    expect(await screen.findByText("准备开始")).toBeInTheDocument();
+    act(() => eventListener?.({ type: "timer.snapshot", snapshot: { ...snapshot, automation: {
+      ...snapshot.automation, activePresenceSource: "camera", cameraPresence: "unknown",
+    } } }));
+    expect(screen.getByText("等待摄像头检测 · 将自动开始")).toBeInTheDocument();
+    act(() => eventListener?.({ type: "timer.snapshot", snapshot: { ...snapshot, status: "manual-paused", automation: {
+      ...snapshot.automation, activePresenceSource: "camera", cameraPresence: "present", manualPauseLocked: true,
+    } } }));
+    expect(screen.getByText("手动暂停 · 点击继续")).toBeInTheDocument();
+  });
+
+  it("sizes and describes every stage using its planned duration and the current Core round", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    const sequence = screen.getByRole("img", { name: /第 1 \/ 6 阶段/ });
+    const stages = Array.from(sequence.querySelectorAll("span"));
+    expect(stages.map((stage) => stage.style.flexGrow)).toEqual(["1800", "300", "1800", "300", "1800", "600"]);
+    expect(stages.map((stage) => stage.title)).toEqual([
+      "第 1 阶段 · 专注 · 30 分钟", "第 2 阶段 · 短休 · 5 分钟", "第 3 阶段 · 专注 · 30 分钟",
+      "第 4 阶段 · 短休 · 5 分钟", "第 5 阶段 · 专注 · 30 分钟", "第 6 阶段 · 长休 · 10 分钟",
+    ]);
+    expect(sequence).toHaveAttribute("aria-label", expect.stringContaining("专注 30 分钟 → 短休 5 分钟"));
+    expect(screen.getByText("第 1/3 轮专注")).toBeInTheDocument();
+    act(() => eventListener?.({ type: "settings.changed", settings: { ...settings, focusDurationSeconds: 1_500, focusRoundsPerCycle: 2 } }));
+    expect(Array.from(sequence.querySelectorAll("span")).map((stage) => stage.style.flexGrow)).toEqual(["1800", "300", "1500", "600"]);
+    act(() => eventListener?.({ type: "timer.snapshot", snapshot: {
+      ...waitingBreakSnapshot, activeCycleRounds: 2,
+      round: { ...waitingBreakSnapshot.round, positionInCycle: 2, totalDurationMs: 240_000 }, remainingMs: 240_000,
+    } }));
+    expect(screen.getByText("第 1 轮后的短休")).toBeInTheDocument();
+    expect(Array.from(screen.getByRole("img", { name: /第 2 \/ 4 阶段/ }).querySelectorAll("span")).map((stage) => stage.style.flexGrow)).toEqual(["1500", "240", "1500", "600"]);
+    act(() => eventListener?.({ type: "timer.snapshot", snapshot: {
+      ...waitingBreakSnapshot, activeCycleRounds: 2,
+      round: { ...waitingBreakSnapshot.round, kind: "long-break", positionInCycle: 4, totalDurationMs: 600_000 }, remainingMs: 600_000,
+    } }));
+    expect(screen.getByText("第 2 轮后的长休")).toBeInTheDocument();
+    expect(screen.queryByText(/本周期/)).not.toBeInTheDocument();
+  });
+
+  it("reports camera failure to Main and reflects the visible input fallback", async () => {
+    const start = vi.mocked(startCameraPresence);
+    start.mockClear();
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    await act(async () => eventListener?.({ type: "camera.state", state: { enabled: true, generation: 4 } }));
+    await act(async () => { start.mock.calls[0]![1]("摄像头权限未开启"); });
+    expect(window.pomodoro.reportCameraPresence).toHaveBeenCalledWith("unknown", 4);
+    await act(async () => {
+      eventListener?.({ type: "settings.changed", settings });
+      eventListener?.({ type: "camera.state", state: { enabled: false, generation: 5 } });
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("摄像头权限未开启");
+    expect(screen.getByRole("button", { name: "感知模式：触控，切换为监控" })).toBeEnabled();
+  });
+
+  it("preserves unsaved settings when the immediate sensing mode changes", async () => {
+    render(<App />);
+    await openSettings();
+    fireEvent.change(screen.getByRole("spinbutton", { name: "专注时长" }), { target: { value: "25" } });
+    await act(async () => eventListener?.({ type: "settings.changed", settings: { ...settings, focusPresenceSource: "camera" } }));
+    expect(screen.getByRole("spinbutton", { name: "专注时长" })).toHaveValue(25);
+    expect(screen.getByRole("button", { name: "监控" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("applies the short-break color variant from the Core round kind", async () => {
@@ -236,7 +442,8 @@ describe("App", () => {
     const stats = screen.getByRole("menuitem", { name: "打开统计" });
     const openSettingsItem = screen.getByRole("menuitem", { name: "打开设置" });
     const restart = screen.getByRole("menuitem", { name: "重新开始当前轮次" });
-    expect(screen.getAllByRole("menuitem")).toEqual([stats, openSettingsItem, restart]);
+    const switchMode = screen.getByRole("menuitem", { name: "切换为监控感知" });
+    expect(screen.getAllByRole("menuitem")).toEqual([stats, openSettingsItem, switchMode, restart]);
     expect(stats).toHaveFocus();
     fireEvent.keyDown(stats, { key: "ArrowDown" });
     expect(openSettingsItem).toHaveFocus();
@@ -290,8 +497,8 @@ describe("App", () => {
   });
 
   it.each([
-    ["active", "等待离席 · 将自动开始"],
-    ["desk", "等待无输入 · 将自动开始"],
+    ["active", "无输入 40 秒开始休息"],
+    ["desk", "无输入 40 秒开始休息"],
   ] as const)("shows %s break automation with an optional manual start", async (breakMode, message) => {
     window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({
       ...waitingBreakSnapshot,
@@ -321,7 +528,7 @@ describe("App", () => {
 
     act(() => eventListener?.({ type: "timer.snapshot", snapshot: waitingBreakSnapshot }));
     expect(screen.getByRole("heading", { name: "短休" })).toBeInTheDocument();
-    expect(screen.getByText("等待离席 · 将自动开始")).toBeInTheDocument();
+    expect(screen.getByText("无输入 40 秒开始休息")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "手动开始休息" })).toBeEnabled();
 
     act(() => eventListener?.({
@@ -344,7 +551,7 @@ describe("App", () => {
     window.pomodoro.command = vi.fn().mockResolvedValue({ ...paused, status: "running" });
     render(<App />);
 
-    expect(await screen.findByText("有输入 · 休息暂停")).toBeInTheDocument();
+    expect(await screen.findByText("无输入 40 秒继续休息")).toBeInTheDocument();
     const resume = screen.getByRole("button", { name: "继续计时" });
     expect(resume).toHaveAttribute("title", "继续计时");
     fireEvent.click(resume);
@@ -363,15 +570,15 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "继续计时" })).toHaveAttribute("title", "继续计时");
   });
 
-  it("keeps manually paused breaks locked until the user continues", async () => {
+  it("explains that paused breaks will continue automatically when their condition is met", async () => {
     window.pomodoro.getSnapshot = vi.fn().mockResolvedValue({
       ...waitingBreakSnapshot,
-      status: "manual-paused",
-      automation: { ...waitingBreakSnapshot.automation, manualPauseLocked: true },
+      remainingMs: 210_000,
+      automation: { ...waitingBreakSnapshot.automation, manualPauseLocked: false },
     } satisfies TimerSnapshot);
     render(<App />);
 
-    expect(await screen.findByText("手动暂停 · 点击继续")).toBeInTheDocument();
+    expect(await screen.findByText("无输入 40 秒继续休息")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "继续计时" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "手动开始休息" })).not.toBeInTheDocument();
     expect(window.pomodoro.command).not.toHaveBeenCalled();

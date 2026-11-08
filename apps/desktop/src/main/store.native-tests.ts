@@ -20,7 +20,7 @@ const initialSnapshot = () => timerSnapshotSchema.parse({
   revision: 0, emittedAt: "2026-10-22T00:00:00.000Z", activeCycleRounds: 3,
   status: "idle", remainingMs: 1_800_000,
   round: { kind: "focus", cycleNumber: 1, positionInCycle: 1, focusRoundNumber: 1, breakMode: null, totalDurationMs: 1_800_000 },
-  automation: { activePresenceSource: "input", inputPresence: "unknown", cameraPresence: "unknown", inputMonitoringAvailable: true, cameraMonitoringAvailable: false, manualPauseLocked: false, pauseReason: "none" },
+  automation: { activePresenceSource: "input", inputPresence: "unknown", cameraPresence: "unknown", inputMonitoringAvailable: true, cameraMonitoringAvailable: false, breakPreparation: null, manualPauseLocked: false, pauseReason: "none" },
 });
 
 const session = (id: string): CompletedSession => ({
@@ -102,6 +102,105 @@ test("new checkpoints, completion transactions, shutdown and recovery copies con
     } finally { recovered.close(); }
   } finally { store.close(); }
 }));
+
+test("persists camera selection and frozen progress without retaining camera presence", () => withDirectory((directory) => {
+  const store = new SqliteStore(directory);
+  let now = 0;
+  let remaining = 0;
+  try {
+    const engine = new TimerEngine(store, { now: () => now, wallDate: () => new Date(0) });
+    engine.applySettings({ focusPresenceSource: "camera" });
+    assert.equal(engine.cameraSample("present").status, "running");
+    now = 5_000;
+    const paused = engine.cameraSample("away");
+    assert.equal(paused.status, "auto-paused");
+    assert.equal(paused.automation.cameraPresence, "away");
+    remaining = paused.remainingMs;
+  } finally { store.close(); }
+  const database = new Database(join(directory, "pomodoro.sqlite"));
+  try {
+    const checkpoint = database.prepare("SELECT snapshot_json FROM timer_snapshot").get() as { snapshot_json: string };
+    assert.doesNotMatch(checkpoint.snapshot_json, /automation|cameraPresence|cameraMonitoringAvailable|camera-away|present|away/);
+    assert.equal(JSON.parse(checkpoint.snapshot_json).remainingMs, remaining);
+  } finally { database.close(); }
+  const reopened = new SqliteStore(directory);
+  try {
+    assert.equal(reopened.loadSettings().focusPresenceSource, "camera");
+    const restored = new TimerEngine(reopened, { now: () => now, wallDate: () => new Date(0) });
+    assert.equal(restored.snapshot.remainingMs, remaining);
+    assert.equal(restored.snapshot.status, "auto-paused");
+    assert.equal(restored.snapshot.automation.activePresenceSource, "camera");
+    assert.equal(restored.snapshot.automation.cameraPresence, "unknown");
+    assert.equal(restored.snapshot.automation.cameraMonitoringAvailable, false);
+    assert.equal(restored.inputSample(0).status, "auto-paused");
+    assert.throws(() => restored.command("resume"), /摄像头/);
+    assert.equal(restored.cameraSample("present").status, "running");
+  } finally { reopened.close(); }
+}));
+
+test("publishes break preparation without changing or enriching the persisted checkpoint", () => withDirectory((directory) => {
+  const store = new SqliteStore(directory);
+  try {
+    const engine = new TimerEngine(store, { now: () => 0, wallDate: () => new Date(0) });
+    engine.command("next");
+    const database = new Database(join(directory, "pomodoro.sqlite"));
+    try {
+      const before = database.prepare("SELECT snapshot_json FROM timer_snapshot").get() as { snapshot_json: string };
+      const preparing = engine.inputSample(35);
+      assert.deepEqual(preparing.automation.breakPreparation, { remainingSeconds: 5, countdown: true });
+      assert.equal(preparing.remainingMs, 300_000);
+      const after = database.prepare("SELECT snapshot_json FROM timer_snapshot").get() as { snapshot_json: string };
+      assert.deepEqual(after, before);
+      assert.doesNotMatch(after.snapshot_json, /breakPreparation|remainingSeconds|countdown|automation/);
+      assert.equal(engine.inputSample(40).remainingMs, 300_000);
+    } finally { database.close(); }
+  } finally { store.close(); }
+  const reopened = new SqliteStore(directory);
+  try {
+    const restored = new TimerEngine(reopened, { now: () => 0, wallDate: () => new Date(0) });
+    assert.equal(restored.snapshot.automation.breakPreparation, null);
+    assert.equal(restored.snapshot.remainingMs, 300_000);
+  } finally { reopened.close(); }
+}));
+
+for (const kind of ["focus", "input-break", "camera-break"] as const) {
+  test(`normalizes a legacy manually paused ${kind} while preserving the focus-only manual lock`, () => withDirectory((directory) => {
+    const legacy = new Database(join(directory, "pomodoro.sqlite"));
+    legacy.exec(legacySchema);
+    legacy.prepare("INSERT INTO schema_migrations VALUES(?,?,?)").run(3, "electron-sqlite-v3-timer-state", "2026-10-22T00:00:00.000Z");
+    const previous = initialSnapshot();
+    previous.status = "manual-paused";
+    previous.automation.manualPauseLocked = true;
+    delete previous.automation.breakPreparation;
+    if (kind !== "focus") {
+      previous.round = { ...previous.round, kind: "short-break", positionInCycle: 2, focusRoundNumber: null, breakMode: "active", totalDurationMs: 300_000 };
+      previous.remainingMs = 120_000;
+    }
+    if (kind === "camera-break") legacy.prepare("INSERT INTO settings VALUES('settings',?,?)").run(JSON.stringify({ ...defaultSettings, focusPresenceSource: "camera" }), "2026-10-22T00:00:00.000Z");
+    legacy.prepare("INSERT INTO timer_snapshot VALUES(1,3,0,?,?)").run(JSON.stringify(previous), previous.emittedAt);
+    legacy.close();
+    const store = new SqliteStore(directory);
+    try {
+      const engine = new TimerEngine(store, { now: () => 0, wallDate: () => new Date(0) });
+      assert.equal(engine.snapshot.status, kind === "focus" ? "manual-paused" : "auto-paused");
+      assert.equal(engine.snapshot.automation.manualPauseLocked, kind === "focus");
+      assert.equal(engine.snapshot.automation.breakPreparation, null);
+      if (kind === "focus") assert.equal(engine.inputSample(0).status, "manual-paused");
+      else {
+        if (kind === "camera-break") {
+          assert.equal(engine.inputSample(40).status, "auto-paused");
+          assert.equal(engine.cameraSample("away").status, "running");
+        } else assert.equal(engine.inputSample(40).status, "running");
+        assert.equal(engine.snapshot.remainingMs, 120_000);
+      }
+      const database = new Database(join(directory, "pomodoro.sqlite"));
+      try {
+        const stored = database.prepare("SELECT snapshot_json FROM timer_snapshot").get() as { snapshot_json: string };
+        assert.doesNotMatch(stored.snapshot_json, /breakPreparation|remainingSeconds|countdown|manualPauseLocked/);
+      } finally { database.close(); }
+    } finally { store.close(); }
+  }));
+}
 
 test("retries WAL cleanup on reopening a migrated checkpoint after a reader releases the old pages", () => withDirectory((directory) => {
   const path = join(directory, "pomodoro.sqlite");

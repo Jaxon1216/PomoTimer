@@ -76,6 +76,164 @@ function observeIdle(engine: TimerEngine, clock: FakeClock, firstSecond: number,
 }
 
 describe("TimerEngine", () => {
+  describe("camera presence across focus and breaks", () => {
+    it("automatically starts and resumes camera focus while input remains observable", () => {
+      const { engine, clock } = create();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      expect(engine.snapshot.status).toBe("idle");
+      expect(engine.cameraSample("present").status).toBe("running");
+      clock.advance(1_000);
+      expect(engine.inputSample(40).status).toBe("running");
+      expect(engine.inputSample(undefined, false).status).toBe("running");
+      const paused = engine.cameraSample("away");
+      expect(paused.status).toBe("auto-paused");
+      expect(paused.automation.pauseReason).toBe("camera-away");
+      clock.advance(10_000);
+      expect(engine.inputSample(0).remainingMs).toBe(paused.remainingMs);
+      expect(engine.cameraSample("present").status).toBe("running");
+    });
+
+    it("keeps touch-input focus idle until an explicit start in every cycle position", () => {
+      const { engine } = create();
+      expect(engine.inputSample(0).status).toBe("idle");
+      engine.command("next");
+      engine.command("next");
+      expect(engine.snapshot.round.focusRoundNumber).toBe(2);
+      expect(engine.inputSample(0).status).toBe("idle");
+      expect(engine.command("start").status).toBe("running");
+    });
+
+    it("uses camera absence for active breaks and presence for the next focus", () => {
+      const { engine, clock, store } = create();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      engine.cameraSample("present");
+      clock.advance(defaultSettings.focusDurationSeconds * 1000);
+      const waiting = structuredClone(engine.snapshot);
+      expect(waiting.round.kind).toBe("short-break");
+      expect(waiting.automation.activePresenceSource).toBe("camera");
+      expect(engine.inputSample(600).status).toBe("auto-paused");
+      expect(engine.cameraSample("present").status).toBe("auto-paused");
+      expect(engine.cameraSample("away").status).toBe("running");
+      clock.advance(1_000);
+      expect(engine.inputSample(0).status).toBe("running");
+      const interrupted = engine.cameraSample("present");
+      expect(interrupted.status).toBe("auto-paused");
+      expect(interrupted.automation.pauseReason).toBe("break-condition");
+      clock.advance(5_000);
+      expect(engine.inputSample(600).remainingMs).toBe(interrupted.remainingMs);
+      engine.cameraSample("away");
+      clock.advance(interrupted.remainingMs);
+      const nextFocus = engine.snapshot;
+      expect(nextFocus.round.kind).toBe("focus");
+      expect(nextFocus.status).toBe("idle");
+      expect(engine.cameraSample("present").status).toBe("running");
+      expect(store.sessions).toHaveLength(1);
+    });
+
+    it("keeps desk breaks on system input in camera mode", () => {
+      const { engine } = create();
+      engine.applySettings({ focusPresenceSource: "camera", defaultBreakMode: "desk" });
+      engine.command("next");
+      expect(engine.snapshot.automation.activePresenceSource).toBe("input");
+      expect(engine.cameraSample("away").status).toBe("auto-paused");
+      expect(engine.inputSample(40).status).toBe("running");
+      expect(engine.cameraSample("unknown").status).toBe("running");
+      expect(engine.inputSample(0).status).toBe("auto-paused");
+    });
+
+    it.each(["focus", "active-break"] as const)("safely pauses %s on unknown camera presence without a manual camera fallback", (kind) => {
+      const { engine, clock } = create();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      if (kind === "active-break") engine.command("next");
+      expect(() => engine.command("start")).toThrow("摄像头");
+      const expectedPresence = kind === "focus" ? "present" : "away";
+      engine.cameraSample(expectedPresence);
+      clock.advance(1_000);
+      const unavailable = engine.cameraSample("unknown");
+      expect(unavailable.status).toBe("auto-paused");
+      expect(unavailable.automation.pauseReason).toBe("source-unavailable");
+      expect(unavailable.automation.cameraMonitoringAvailable).toBe(false);
+      expect(() => engine.command("resume")).toThrow("摄像头");
+      clock.advance(5_000);
+      expect(engine.inputSample(0).remainingMs).toBe(unavailable.remainingMs);
+      expect(engine.cameraSample(expectedPresence).status).toBe("running");
+    });
+
+    it.each(["focus", "active-break"] as const)("waits for a fresh source sample when switching a running %s", (kind) => {
+      const { engine } = create();
+      if (kind === "active-break") {
+        engine.command("next");
+        engine.inputSample(40);
+      } else engine.command("start");
+      engine.applySettings({ focusPresenceSource: "camera" });
+      const waiting = engine.snapshot;
+      expect(waiting.status).toBe("auto-paused");
+      expect(waiting.automation.activePresenceSource).toBe("camera");
+      expect(waiting.automation.cameraPresence).toBe("unknown");
+      expect(engine.inputSample(kind === "focus" ? 0 : 40).status).toBe("auto-paused");
+      expect(engine.cameraSample(kind === "focus" ? "present" : "away").status).toBe("running");
+      engine.applySettings({ focusPresenceSource: "input" });
+      expect(engine.snapshot.status).toBe("auto-paused");
+      expect(engine.cameraSample("present").status).toBe("auto-paused");
+      expect(engine.inputSample(kind === "focus" ? 0 : 40).status).toBe("running");
+    });
+
+    it("preserves a manually running desk break when changing the focus source", () => {
+      const { engine } = create();
+      engine.applySettings({ defaultBreakMode: "desk" });
+      engine.command("next");
+      engine.inputSample(undefined, false);
+      engine.command("resume");
+      engine.applySettings({ focusPresenceSource: "camera" });
+      expect(engine.snapshot.automation.activePresenceSource).toBe("input");
+      expect(engine.inputSample(undefined, false).status).toBe("running");
+    });
+
+    it("keeps a manually paused focus locked across presence, source changes and restart", () => {
+      const { engine, store, clock } = create();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      engine.cameraSample("present");
+      engine.command("pause");
+      expect(engine.cameraSample("present").status).toBe("manual-paused");
+      const restored = new TimerEngine(store, clock);
+      expect(restored.cameraSample("present").status).toBe("manual-paused");
+      restored.applySettings({ focusPresenceSource: "input" });
+      expect(restored.inputSample(0).status).toBe("manual-paused");
+      expect(restored.command("resume").status).toBe("running");
+    });
+
+    it("does not lock camera active-break automation after the user pauses", () => {
+      const { engine, clock } = create();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      engine.command("next");
+      engine.cameraSample("away");
+      clock.advance(1_000);
+      const paused = engine.command("pause");
+      expect(paused.status).toBe("auto-paused");
+      expect(paused.automation.manualPauseLocked).toBe(false);
+      clock.advance(5_000);
+      expect(engine.cameraSample("present").remainingMs).toBe(paused.remainingMs);
+      expect(engine.cameraSample("away").status).toBe("running");
+    });
+
+    it.each(["suspend", "lock", "restart"] as const)("discards camera presence after %s", (interruption) => {
+      const first = create();
+      let engine = first.engine;
+      engine.applySettings({ focusPresenceSource: "camera" });
+      engine.cameraSample("present");
+      if (interruption === "suspend") engine.systemSuspend();
+      else if (interruption === "lock") {
+        engine.systemLock();
+        expect(engine.cameraSample("present").status).toBe("auto-paused");
+        engine.systemUnlock();
+      } else engine = new TimerEngine(first.store, first.clock);
+      expect(engine.snapshot.automation.cameraPresence).toBe("unknown");
+      expect(() => engine.command("resume")).toThrow("摄像头");
+      expect(engine.inputSample(0).status).toBe("auto-paused");
+      expect(engine.cameraSample("present").status).toBe("running");
+    });
+  });
+
   it("locks automatic recovery after a manual pause, including restart", () => {
     const first = create();
     first.engine.command("start");
@@ -261,7 +419,7 @@ describe("TimerEngine", () => {
       expect(stillPaused.automation.manualPauseLocked).toBe(true);
     });
 
-    it("discards break pre-counting and cannot start a waiting break while locked", () => {
+    it("clears break preparation and cannot start a waiting break while locked", () => {
       const { engine, clock } = create();
       const waiting = engine.command("next");
       observeIdle(engine, clock, 30, 35);
@@ -477,204 +635,186 @@ describe("TimerEngine", () => {
     expect(engine.snapshot.remainingMs).toBe(defaultSettings.shortBreakDurationSeconds * 1000 - 1_000);
   });
 
-  it("keeps a manually paused break locked when system input meets the automatic condition", () => {
-    const { engine, clock } = create();
-    engine.command("next");
-    expect(engine.inputSample(defaultSettings.inputIdleThresholdSeconds, true).status).toBe("running");
-    const paused = engine.command("pause");
-
-    clock.advance(20_000);
-    const stillPaused = engine.inputSample(defaultSettings.inputIdleThresholdSeconds + 100, true);
-    expect(stillPaused.status).toBe("manual-paused");
-    expect(stillPaused.automation.manualPauseLocked).toBe(true);
-    expect(stillPaused.remainingMs).toBe(paused.remainingMs);
-    expect(engine.command("resume").status).toBe("running");
-  });
-
-  describe("confirmed break countdown", () => {
-    it.each(["active", "desk"] as const)("confirms the preceding ten seconds once for a %s break", (breakMode) => {
+  describe("visible input break preparation", () => {
+    it.each(["active", "desk"] as const)("shows ten to one without consuming any %s break time", (breakMode) => {
       const { engine, clock } = create();
       engine.applySettings({ defaultBreakMode: breakMode });
       const waiting = engine.command("next");
-      expect(waiting.round.breakMode).toBe(breakMode);
-      expect(engine.inputSample(29, true).remainingMs).toBe(waiting.remainingMs);
-
+      expect(waiting.automation.breakPreparation).toBeNull();
+      expect(engine.inputSample(0).automation.breakPreparation).toEqual({ remainingSeconds: 40, countdown: false });
+      expect(engine.inputSample(29).automation.breakPreparation).toEqual({ remainingSeconds: 11, countdown: false });
       for (let idleSeconds = 30; idleSeconds < 40; idleSeconds += 1) {
         clock.advance(1_000);
-        const pending = engine.inputSample(idleSeconds, true);
-        expect(pending.status).toBe("auto-paused");
-        expect(pending.remainingMs).toBe(waiting.remainingMs);
+        const preparing = engine.inputSample(idleSeconds);
+        expect(preparing.status).toBe("auto-paused");
+        expect(preparing.remainingMs).toBe(waiting.remainingMs);
+        expect(preparing.automation.breakPreparation).toEqual({ remainingSeconds: 40 - idleSeconds, countdown: true });
       }
-
-      const confirmed = observeIdle(engine, clock, 40, 40);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
-      expect(engine.inputSample(40, true).remainingMs).toBe(confirmed.remainingMs);
-      expect(observeIdle(engine, clock, 41, 41).remainingMs).toBe(waiting.remainingMs - 11_000);
+      const started = observeIdle(engine, clock, 40, 40);
+      expect(started.status).toBe("running");
+      expect(started.remainingMs).toBe(waiting.remainingMs);
+      expect(started.automation.breakPreparation).toBeNull();
+      expect(observeIdle(engine, clock, 41, 41).remainingMs).toBe(waiting.remainingMs - 1_000);
     });
 
-    it("discards the unconfirmed countdown when input resumes at 35 seconds", () => {
+    it("restarts the full preparation window on input without deducting preparation time", () => {
       const { engine, clock } = create();
       const waiting = engine.command("next");
       observeIdle(engine, clock, 30, 35);
-      expect(engine.inputSample(0, true).remainingMs).toBe(waiting.remainingMs);
-
-      const confirmed = observeIdle(engine, clock, 1, 40);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
+      const reset = engine.inputSample(0);
+      expect(reset.automation.breakPreparation).toEqual({ remainingSeconds: 40, countdown: false });
+      expect(reset.remainingMs).toBe(waiting.remainingMs);
+      const started = observeIdle(engine, clock, 1, 40);
+      expect(started.remainingMs).toBe(waiting.remainingMs);
+      expect(started.status).toBe("running");
     });
 
-    it("does not carry a countdown across input hidden by a delayed sample", () => {
-      const { engine, clock } = create();
-      const waiting = engine.command("next");
-      observeIdle(engine, clock, 30, 35);
-
-      clock.advance(60_000);
-      const confirmed = engine.inputSample(45, true);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs);
-    });
-
-    it("caps the confirmed countdown at ten seconds after delayed continuous inactivity", () => {
-      const { engine, clock } = create();
-      const waiting = engine.command("next");
-      engine.inputSample(30, true);
-
-      clock.advance(60_000);
-      const confirmed = engine.inputSample(90, true);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
-    });
-
-    it("only confirms time observed after entering the current break", () => {
-      const { engine, clock } = create();
-      engine.command("start");
-      observeIdle(engine, clock, 30, 39);
-      const waiting = engine.command("next");
-      engine.inputSample(39, true);
-
-      const confirmed = observeIdle(engine, clock, 40, 40);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 1_000);
-    });
-
-    it.each(["start", "resume"] as const)("discards the pending countdown on manual %s and preserves the pause lock", (command) => {
-      const { engine, clock } = create();
-      const waiting = engine.command("next");
-      observeIdle(engine, clock, 30, 35);
-      expect(engine.command(command).remainingMs).toBe(waiting.remainingMs);
-      engine.command("pause");
-
-      const paused = observeIdle(engine, clock, 36, 45);
-      expect(paused.status).toBe("manual-paused");
-      expect(paused.remainingMs).toBe(waiting.remainingMs);
-      expect(engine.command("resume").remainingMs).toBe(waiting.remainingMs);
-      expect(engine.inputSample(45, true).remainingMs).toBe(waiting.remainingMs);
-    });
-
-    it("discards the pending countdown on reset without automatically starting the idle round", () => {
-      const { engine, clock } = create();
-      const waiting = engine.command("next");
-      observeIdle(engine, clock, 30, 35);
-      expect(engine.command("reset").remainingMs).toBe(waiting.remainingMs);
-
-      const idle = observeIdle(engine, clock, 36, 40);
-      expect(idle.status).toBe("idle");
-      expect(idle.remainingMs).toBe(waiting.remainingMs);
-      expect(engine.command("start").remainingMs).toBe(waiting.remainingMs);
-    });
-
-    it("does not carry an unconfirmed countdown into a later break", () => {
+    it("allows automatic input-based rest after a user pause instead of retaining a manual lock", () => {
       const { engine, clock } = create();
       engine.command("next");
-      observeIdle(engine, clock, 30, 35);
-      expect(engine.command("next").status).toBe("idle");
-      const waiting = engine.command("next");
-
-      const confirmed = engine.inputSample(40, true);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs);
-    });
-
-    it.each(["input failure", "suspend", "restart"] as const)("discards an unconfirmed countdown after %s", (interruption) => {
-      const { engine: originalEngine, clock, store } = create();
-      let engine = originalEngine;
-      const waiting = engine.command("next");
-      observeIdle(engine, clock, 30, 35);
-      if (interruption === "input failure") engine.inputSample(undefined, false);
-      else if (interruption === "suspend") engine.systemSuspend();
-      else engine = new TimerEngine(store, clock);
-
+      engine.inputSample(40);
+      clock.advance(5_000);
+      const paused = engine.command("pause");
+      expect(paused.status).toBe("auto-paused");
+      expect(paused.automation.manualPauseLocked).toBe(false);
       clock.advance(20_000);
-      const confirmed = engine.inputSample(55, true);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs);
+      expect(engine.inputSample(0).remainingMs).toBe(paused.remainingMs);
+      expect(engine.inputSample(0).automation.breakPreparation?.remainingSeconds).toBe(40);
+      const resumed = engine.inputSample(40);
+      expect(resumed.status).toBe("running");
+      expect(resumed.remainingMs).toBe(paused.remainingMs);
     });
 
-    it("uses a fresh pending interval after the idle threshold changes", () => {
-      const { engine, clock } = create();
+    it.each(["input", "camera"] as const)("accepts pause while a %s break is already waiting without locking automation", (focusPresenceSource) => {
+      const { engine } = create();
+      engine.applySettings({ focusPresenceSource });
       const waiting = engine.command("next");
-      observeIdle(engine, clock, 30, 35);
-      engine.applySettings({ inputIdleThresholdSeconds: 75 });
-      clock.advance(40_000);
-
-      const confirmed = engine.inputSample(75, true);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs);
+      const paused = engine.command("pause");
+      expect(paused.status).toBe("auto-paused");
+      expect(paused.automation.manualPauseLocked).toBe(false);
+      expect(paused.remainingMs).toBe(waiting.remainingMs);
+      const resumed = focusPresenceSource === "camera" ? engine.cameraSample("away") : engine.inputSample(40);
+      expect(resumed.status).toBe("running");
     });
 
-    it.each([75, 600])("applies the pending interval relative to a configured threshold of %s seconds", (threshold) => {
+    it("does not reject or lock a break when pause races with the preceding focus completion", () => {
+      const { engine, clock, store } = create();
+      engine.command("start");
+      clock.advance(defaultSettings.focusDurationSeconds * 1000 - 1);
+      expect(engine.snapshot.remainingMs).toBe(1);
+      clock.advance(1);
+      const afterPause = engine.command("pause");
+      expect(afterPause.round.kind).toBe("short-break");
+      expect(afterPause.remainingMs).toBe(defaultSettings.shortBreakDurationSeconds * 1000);
+      expect(afterPause.status).toBe("auto-paused");
+      expect(afterPause.automation.manualPauseLocked).toBe(false);
+      expect(store.sessions).toHaveLength(1);
+      expect(engine.inputSample(40).status).toBe("running");
+    });
+
+    it("normalizes a legacy manually paused break on restart", () => {
+      const { engine, clock, store } = create();
+      engine.command("next");
+      store.snapshot = { ...store.snapshot!, status: "manual-paused", remainingMs: 120_000 };
+      const restored = new TimerEngine(store, clock);
+      expect(restored.snapshot.status).toBe("auto-paused");
+      expect(restored.snapshot.automation.manualPauseLocked).toBe(false);
+      expect(restored.inputSample(40).status).toBe("running");
+      expect(restored.snapshot.remainingMs).toBe(120_000);
+    });
+
+    it("exposes preparation changes without persisting sample fields or writing unchanged checkpoints", () => {
+      const { engine, store } = create();
+      engine.command("next");
+      const writes = store.snapshotWrites;
+      const first = engine.inputSample(30);
+      const next = engine.inputSample(31);
+      expect(next.revision).toBeGreaterThan(first.revision);
+      expect(next.automation.breakPreparation).toEqual({ remainingSeconds: 9, countdown: true });
+      expect(engine.inputSample(31).revision).toBe(next.revision);
+      expect(store.snapshotWrites).toBe(writes);
+      expect(store.snapshot).not.toHaveProperty("automation");
+      expect(store.snapshot).not.toHaveProperty("breakPreparation");
+    });
+
+    it.each([10, 75, 600])("uses the configured %s-second idle threshold and begins from full break duration", (threshold) => {
       const { engine, clock } = create();
       engine.applySettings({ inputIdleThresholdSeconds: threshold });
       const waiting = engine.command("next");
-      expect(observeIdle(engine, clock, threshold - 10, threshold - 1).remainingMs).toBe(waiting.remainingMs);
-      expect(observeIdle(engine, clock, threshold, threshold).remainingMs).toBe(waiting.remainingMs - 10_000);
+      if (threshold > 10) expect(engine.inputSample(threshold - 11).automation.breakPreparation).toEqual({ remainingSeconds: 11, countdown: false });
+      expect(observeIdle(engine, clock, threshold - 10, threshold - 1).automation.breakPreparation).toEqual({ remainingSeconds: 1, countdown: true });
+      expect(observeIdle(engine, clock, threshold, threshold).remainingMs).toBe(waiting.remainingMs);
     });
 
-    it("waits for ten continuous idle seconds at the minimum threshold despite repeated active input", () => {
-      const { engine, clock } = create();
-      engine.applySettings({ inputIdleThresholdSeconds: 10 });
-      const waiting = engine.command("next");
+    it("does not show preparation during focus, camera active breaks or running breaks", () => {
+      const { engine } = create();
+      expect(engine.inputSample(30).automation.breakPreparation).toBeNull();
+      engine.applySettings({ focusPresenceSource: "camera" });
+      engine.command("next");
+      expect(engine.inputSample(30).automation.breakPreparation).toBeNull();
+      expect(engine.cameraSample("away").automation.breakPreparation).toBeNull();
+    });
 
-      for (let sample = 0; sample < 20; sample += 1) {
-        clock.advance(1_000);
-        const activeInput = engine.inputSample(0, true);
-        expect(activeInput.status).toBe("auto-paused");
-        expect(activeInput.remainingMs).toBe(waiting.remainingMs);
+    it.each(["input failure", "suspend", "lock", "restart", "threshold change", "source change"] as const)("clears preparation after %s until a valid sample", (interruption) => {
+      const initial = create();
+      let engine = initial.engine;
+      engine.command("next");
+      expect(engine.inputSample(35).automation.breakPreparation?.remainingSeconds).toBe(5);
+      if (interruption === "input failure") engine.inputSample(undefined, false);
+      else if (interruption === "suspend") engine.systemSuspend();
+      else if (interruption === "lock") engine.systemLock();
+      else if (interruption === "restart") engine = new TimerEngine(initial.store, initial.clock);
+      else if (interruption === "threshold change") engine.applySettings({ inputIdleThresholdSeconds: 75 });
+      else engine.applySettings({ focusPresenceSource: "camera" });
+      expect(engine.snapshot.automation.breakPreparation).toBeNull();
+      if (interruption === "lock") {
+        expect(engine.inputSample(35).automation.breakPreparation).toBeNull();
+        engine.systemUnlock();
       }
-
-      const pending = observeIdle(engine, clock, 1, 9);
-      expect(pending.status).toBe("auto-paused");
-      expect(pending.remainingMs).toBe(waiting.remainingMs);
-      const confirmed = observeIdle(engine, clock, 10, 10);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
+      if (interruption === "source change") expect(engine.cameraSample("away").status).toBe("running");
+      else expect(engine.inputSample(interruption === "threshold change" ? 75 : 40).status).toBe("running");
     });
 
-    it("preserves the pending countdown while changing the theme", () => {
+    it("does not deduct idle preparation even if samples are delayed for a minute", () => {
       const { engine, clock } = create();
       const waiting = engine.command("next");
-      observeIdle(engine, clock, 30, 35);
-      engine.applySettings({ theme: "dark" });
-
-      const confirmed = observeIdle(engine, clock, 36, 40);
-      expect(confirmed.status).toBe("running");
-      expect(confirmed.remainingMs).toBe(waiting.remainingMs - 10_000);
+      engine.inputSample(30);
+      clock.advance(60_000);
+      expect(engine.inputSample(90).remainingMs).toBe(waiting.remainingMs);
     });
 
-    it("finishes only the current break when the confirmed interval exceeds its remaining time", () => {
+    it("rejoins automatic break preparation after resetting a break", () => {
+      const { engine } = create();
+      engine.command("next");
+      engine.inputSample(35);
+      const reset = engine.command("reset");
+      expect(reset.remainingMs).toBe(defaultSettings.shortBreakDurationSeconds * 1000);
+      expect(reset.automation.breakPreparation).toBeNull();
+      expect(engine.inputSample(39).automation.breakPreparation).toEqual({ remainingSeconds: 1, countdown: true });
+      expect(engine.inputSample(40).status).toBe("running");
+    });
+
+    it("preserves a preparation indication across unrelated appearance changes", () => {
+      const { engine } = create();
+      engine.command("next");
+      engine.inputSample(35);
+      engine.applySettings({ theme: "dark" });
+      expect(engine.snapshot.automation.breakPreparation).toEqual({ remainingSeconds: 5, countdown: true });
+    });
+
+    it("resumes only the remaining break time after the preparation window", () => {
       const { engine, clock, store } = create();
       engine.command("next");
-      engine.inputSample(40, true);
+      engine.inputSample(40);
       clock.advance(defaultSettings.shortBreakDurationSeconds * 1000 - 5_000);
-      const paused = engine.inputSample(0, true);
-      expect(paused.remainingMs).toBe(5_000);
-
-      const nextFocus = observeIdle(engine, clock, 30, 40);
-      expect(nextFocus.round.kind).toBe("focus");
-      expect(nextFocus.status).toBe("idle");
-      expect(nextFocus.remainingMs).toBe(defaultSettings.focusDurationSeconds * 1000);
-      expect(observeIdle(engine, clock, 41, 42).remainingMs).toBe(nextFocus.remainingMs);
+      expect(engine.inputSample(0).remainingMs).toBe(5_000);
+      const resumed = observeIdle(engine, clock, 30, 40);
+      expect(resumed.round.kind).toBe("short-break");
+      expect(resumed.status).toBe("running");
+      expect(resumed.remainingMs).toBe(5_000);
+      clock.advance(5_000);
+      expect(engine.snapshot.round.kind).toBe("focus");
+      expect(engine.snapshot.status).toBe("idle");
       expect(store.sessions).toHaveLength(0);
     });
   });

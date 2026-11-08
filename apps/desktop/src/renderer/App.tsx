@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import {
   BarChart3,
+  Camera,
   ChevronLeft,
   CircleHelp,
   Moon,
@@ -12,9 +13,12 @@ import {
   SkipForward,
   Sun,
   TimerReset,
+  Touchpad,
 } from "lucide-react";
 import type {
   CoreEvent,
+  CameraState,
+  PresenceSource,
   Settings,
   SettingsPatch,
   StatisticsSnapshot,
@@ -22,6 +26,7 @@ import type {
   TimerSnapshot,
 } from "../shared/contracts";
 import { formatDuration } from "./time";
+import { startCameraPresence } from "./camera-presence";
 
 type View = "timer" | "settings" | "stats";
 
@@ -31,24 +36,39 @@ const labels = {
   "long-break": "长休",
 } as const;
 
-function statusText(snapshot: TimerSnapshot): string {
-  if (snapshot.status === "idle") return "准备开始";
+function statusText(snapshot: TimerSnapshot, settings: Settings): string {
   if (snapshot.status === "running") return snapshot.round.kind === "focus" ? "专注中" : "休息中";
-  if (snapshot.status === "manual-paused") return "手动暂停 · 点击继续";
+  const isFocus = snapshot.round.kind === "focus";
+  if (isFocus && snapshot.automation.manualPauseLocked) return "手动暂停 · 点击继续";
+  const waitingBreak = !isFocus && (snapshot.status === "idle" || snapshot.status === "manual-paused"
+    || snapshot.automation.pauseReason === "break-condition");
+  if (waitingBreak) {
+    const action = snapshot.remainingMs === snapshot.round.totalDurationMs ? "开始" : "继续";
+    if (snapshot.automation.activePresenceSource === "camera") {
+      if (!snapshot.automation.cameraMonitoringAvailable) return "等待摄像头检测";
+      return `等待离席 · 将自动${action}`;
+    }
+    if (!snapshot.automation.inputMonitoringAvailable) return "输入检测不可用";
+    const preparation = snapshot.automation.breakPreparation;
+    return preparation?.countdown
+      ? `${preparation.remainingSeconds} 秒后${action}休息`
+      : `无输入 ${settings.inputIdleThresholdSeconds} 秒${action}休息`;
+  }
+  if (snapshot.status === "idle") {
+    if (snapshot.automation.activePresenceSource === "camera") return "等待摄像头检测 · 将自动开始";
+    return "准备开始";
+  }
 
   switch (snapshot.automation.pauseReason) {
     case "input-away":
       return "无输入 · 自动暂停";
+    case "camera-away":
+      return "未检测到在场 · 自动暂停";
     case "break-condition": {
-      if (snapshot.remainingMs < snapshot.round.totalDurationMs && snapshot.automation.inputPresence === "present") {
-        return "有输入 · 休息暂停";
-      }
-      const condition = snapshot.round.breakMode === "desk" ? "等待无输入" : "等待离席";
-      const action = snapshot.remainingMs === snapshot.round.totalDurationMs ? "开始" : "继续";
-      return `${condition} · 将自动${action}`;
+      return "等待休息条件";
     }
     case "source-unavailable":
-      return "输入检测不可用";
+      return snapshot.automation.activePresenceSource === "camera" ? "等待摄像头检测" : "输入检测不可用";
     case "system-suspend":
       return "系统恢复后已暂停";
     case "system-lock":
@@ -67,18 +87,23 @@ function IconButton({
   children,
   onClick,
   className = "",
+  title = label,
+  disabled = false,
 }: {
   label: string;
   children: ReactNode;
   onClick: () => void;
   className?: string;
+  title?: string;
+  disabled?: boolean;
 }): ReactElement {
   return (
     <button
       type="button"
       className={`iconButton ${className}`}
       aria-label={label}
-      title={label}
+      title={title}
+      disabled={disabled}
       onClick={onClick}
     >
       {children}
@@ -111,11 +136,15 @@ function TimerView({
   settings,
   onCommand,
   onView,
+  onModeChange,
+  modeChanging,
 }: {
   snapshot: TimerSnapshot;
   settings: Settings;
   onCommand: (command: TimerCommand) => void;
   onView: (view: View) => void;
+  onModeChange: (source: PresenceSource) => void;
+  modeChanging: boolean;
 }): ReactElement {
   const action = primaryCommand(snapshot);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -124,13 +153,41 @@ function TimerView({
   const progress = 1 - snapshot.remainingMs / snapshot.round.totalDurationMs;
   const remaining = formatDuration(snapshot.remainingMs);
   const circumference = 2 * Math.PI * 108;
-  const monitorStatus = snapshot.automation.inputMonitoringAvailable
+  const currentStatus = statusText(snapshot, settings);
+  const monitorStatus = snapshot.automation.activePresenceSource === "camera"
+    ? snapshot.automation.cameraMonitoringAvailable
+      ? `监控感知 · ${snapshot.automation.cameraPresence === "present" ? "在场" : snapshot.automation.cameraPresence === "away" ? "离开" : "待检测"}`
+      : "监控感知 · 正在启动摄像头"
+    : snapshot.automation.inputMonitoringAvailable
     ? `系统输入检测 · ${settings.inputIdleThresholdSeconds} 秒阈值`
     : snapshot.status === "auto-paused" && snapshot.automation.pauseReason === "source-unavailable"
       ? "已暂停 · 可手动继续"
       : "输入检测不可用 · 手动控制";
   const rounds = snapshot.activeCycleRounds ?? settings.focusRoundsPerCycle;
-  const completedFocus = snapshot.round.focusRoundNumber ?? Math.ceil(snapshot.round.positionInCycle / 2);
+  const focusRoundNumber = snapshot.round.focusRoundNumber ?? Math.ceil(snapshot.round.positionInCycle / 2);
+  const roundCount = snapshot.round.kind === "focus" ? `第 ${focusRoundNumber}/${rounds} 轮专注`
+    : `第 ${snapshot.round.kind === "long-break" ? rounds : focusRoundNumber} 轮后的${labels[snapshot.round.kind]}`;
+  const sequence = Array.from({ length: rounds * 2 }, (_, index): { kind: TimerSnapshot["round"]["kind"]; seconds: number; description: string } => {
+    const kind = index % 2 === 0 ? "focus" : index === rounds * 2 - 1 ? "long-break" : "short-break";
+    const plannedSeconds = kind === "focus" ? settings.focusDurationSeconds
+      : kind === "short-break" ? settings.shortBreakDurationSeconds : settings.longBreakDurationSeconds;
+    const seconds = index === snapshot.round.positionInCycle - 1 ? snapshot.round.totalDurationMs / 1000 : plannedSeconds;
+    return { kind, seconds, description: `${labels[kind]} ${Number((seconds / 60).toFixed(2))} 分钟` };
+  });
+
+  useEffect(() => {
+    const toggleWithSpace = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.code !== "Space" || event.repeat || event.isComposing || event.keyCode === 229
+        || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || menuOpen) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const primaryButton = target?.closest(".timerControls .primary");
+      if (!primaryButton && target?.closest("button, input, select, textarea, a[href], summary, [contenteditable]:not([contenteditable=false]), [role=button], [role=menu], [role=menuitem], [role=slider], [role=checkbox], [role=radio], [role=switch], [role=combobox], [role=textbox], [tabindex]:not([tabindex='-1']), audio[controls], video[controls]")) return;
+      event.preventDefault();
+      onCommand(action.command);
+    };
+    window.addEventListener("keydown", toggleWithSpace);
+    return () => window.removeEventListener("keydown", toggleWithSpace);
+  }, [action.command, menuOpen, onCommand]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -173,6 +230,14 @@ function TimerView({
           POMO<span>DOT</span>
         </span>
         <div className="titleActions">
+          <IconButton className="presenceModeButton" disabled={modeChanging}
+            label={`感知模式：${settings.focusPresenceSource === "input" ? "触控" : "监控"}，切换为${settings.focusPresenceSource === "input" ? "监控" : "触控"}`}
+            title={settings.focusPresenceSource === "input"
+              ? "当前：触控感知。使用系统输入（键盘、鼠标、触控板）；点击切换为监控感知。"
+              : "当前：监控感知。专注和活动休息使用摄像头，桌前休息使用系统输入；影像仅在本机处理，不保存或上传。点击切换为触控感知。"}
+            onClick={() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input")}>
+            {settings.focusPresenceSource === "input" ? <Touchpad size={16} /> : <Camera size={16} />}
+          </IconButton>
           <IconButton label="打开统计" onClick={() => onView("stats")}>
             <BarChart3 size={16} />
           </IconButton>
@@ -186,6 +251,7 @@ function TimerView({
               <div className="timerMenu" id="timer-menu" role="menu" aria-label="计时器操作" onKeyDown={navigateMenu}>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("stats"))}><BarChart3 size={15} />打开统计</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("settings"))}><SettingsIcon size={15} />打开设置</button>
+                <button type="button" role="menuitem" disabled={modeChanging} onClick={() => menuAction(() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input"))}><Camera size={15} />{settings.focusPresenceSource === "input" ? "切换为监控感知" : "切换为触控感知"}</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onCommand("reset"))}><RotateCcw size={15} />重新开始当前轮次</button>
               </div>
             )}
@@ -197,22 +263,20 @@ function TimerView({
         <div className="timerDetails">
           <div className="roundMeta">
             <h1 id="round-title">{labels[snapshot.round.kind]}</h1>
-            <span className="breakMode">
-              {snapshot.round.kind === "focus" ? "系统输入检测" : snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}
-            </span>
+            {snapshot.round.kind !== "focus" && <span className="breakMode">{snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}</span>}
           </div>
           <div className="timerStatus" aria-live="polite">
-            <div className={`statePill state-${snapshot.status}`} title={statusText(snapshot)}>
+            <div className={`statePill state-${snapshot.status}`} title={currentStatus}>
               <span className="stateDot" aria-hidden="true" />
-              <span>{statusText(snapshot)}</span>
+              <span>{currentStatus}</span>
             </div>
-            <p className="monitorStatus" data-available={snapshot.automation.inputMonitoringAvailable}>{monitorStatus}</p>
+            <p className="monitorStatus" data-available={snapshot.automation.activePresenceSource === "camera" ? snapshot.automation.cameraMonitoringAvailable : snapshot.automation.inputMonitoringAvailable}>{monitorStatus}</p>
           </div>
         </div>
         <div className="dialSlot">
           <div
             className="timerDial"
-            aria-label={`${labels[snapshot.round.kind]}，剩余 ${formatDuration(snapshot.remainingMs)}，${statusText(snapshot)}`}
+            aria-label={`${labels[snapshot.round.kind]}，剩余 ${formatDuration(snapshot.remainingMs)}，${currentStatus}`}
           >
             <svg viewBox="0 0 230 230" aria-hidden="true">
               <circle className="dialTrack" cx="115" cy="115" r="108" />
@@ -246,12 +310,13 @@ function TimerView({
       </section>
 
       <footer className="timerFooter">
-        <div className="roundSequence" role="img" aria-label={`第 ${snapshot.round.positionInCycle} / ${rounds * 2} 阶段`}>
-          {Array.from({ length: rounds * 2 }, (_, index) => (
-            <span key={index} className={index === snapshot.round.positionInCycle - 1 ? "current" : index < snapshot.round.positionInCycle - 1 ? "finished" : ""} />
+        <div className="roundSequence" role="img" aria-label={`第 ${snapshot.round.positionInCycle} / ${rounds * 2} 阶段；${sequence.map((stage) => stage.description).join(" → ")}`}>
+          {sequence.map((stage, index) => (
+            <span key={index} style={{ flexGrow: stage.seconds }} title={`第 ${index + 1} 阶段 · ${labels[stage.kind]} · ${Number((stage.seconds / 60).toFixed(2))} 分钟`}
+              className={index === snapshot.round.positionInCycle - 1 ? "current" : index < snapshot.round.positionInCycle - 1 ? "finished" : ""} />
           ))}
         </div>
-        <span className="roundCount">本周期 {completedFocus} / {rounds}</span>
+        <span className="roundCount" title={roundCount}>{roundCount}</span>
       </footer>
     </main>
   );
@@ -273,10 +338,14 @@ function SettingsView({
   settings,
   onSave,
   onBack,
+  onModeChange,
+  modeChanging,
 }: {
   settings: Settings;
   onSave: (patch: SettingsPatch) => Promise<void>;
   onBack: () => void;
+  onModeChange: (source: PresenceSource) => void;
+  modeChanging: boolean;
 }): ReactElement {
   const [draft, setDraft] = useState(settings);
   const [numbers, setNumbers] = useState(() => settingsNumbers(settings));
@@ -284,8 +353,12 @@ function SettingsView({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const savedTimeout = useRef<number | undefined>(undefined);
+  const previousSettings = useRef(settings);
 
   useEffect(() => {
+    const previous = previousSettings.current;
+    previousSettings.current = settings;
+    if ((Object.keys(settings) as Array<keyof Settings>).every((key) => key === "focusPresenceSource" || previous[key] === settings[key])) return;
     setDraft(settings);
     setNumbers(settingsNumbers(settings));
   }, [settings]);
@@ -383,6 +456,12 @@ function SettingsView({
 
           <section className="settingsSection">
             <h2>自动化</h2>
+            <div className="segmented" role="group" aria-label="感知模式">
+              <span>感知模式</span>
+              <button type="button" disabled={modeChanging} aria-pressed={settings.focusPresenceSource === "input"} onClick={() => onModeChange("input")}>触控</button>
+              <button type="button" disabled={modeChanging} aria-pressed={settings.focusPresenceSource === "camera"} onClick={() => onModeChange("camera")}>监控</button>
+            </div>
+            <p className="infoNote">立即生效。监控会请求摄像头权限：专注在场计时，活动休息离席计时；桌前休息根据系统输入计时。画面只在本机处理，不保存或上传。切回触控会关闭摄像头。</p>
             {numberInput("inputIdleThresholdSeconds")}
             <div className="segmented">
               <span>默认休息模式</span>
@@ -628,6 +707,9 @@ export function App(): ReactElement {
   const [view, setView] = useState<View>("timer");
   const [fatalError, setFatalError] = useState<{ title: string; message: string; storage: boolean } | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [cameraState, setCameraState] = useState<CameraState>({ enabled: false, generation: 0 });
+  const [modeChanging, setModeChanging] = useState(false);
+  const modeChangePending = useRef(false);
   const statisticsRequest = useRef(0);
 
   const syncStats = useCallback(async () => {
@@ -654,13 +736,29 @@ export function App(): ReactElement {
     setSettings(await window.pomodoro.updateSettings(patch));
   }, []);
 
+  const changeMode = useCallback(async (source: PresenceSource) => {
+    if (modeChangePending.current) return;
+    modeChangePending.current = true;
+    setModeChanging(true);
+    try {
+      await saveSettings({ focusPresenceSource: source });
+      setOperationError(null);
+    } catch (reason) {
+      setOperationError(reason instanceof Error ? reason.message : "感知模式切换失败，请重试");
+    } finally {
+      modeChangePending.current = false;
+      setModeChanging(false);
+    }
+  }, [saveSettings]);
+
   useEffect(() => {
     let active = true;
-    void Promise.all([window.pomodoro.getSnapshot(), window.pomodoro.getSettings()])
-      .then(([nextSnapshot, nextSettings]) => {
+    void Promise.all([window.pomodoro.getSnapshot(), window.pomodoro.getSettings(), window.pomodoro.getCameraState()])
+      .then(([nextSnapshot, nextSettings, nextCameraState]) => {
         if (active) {
           setSnapshot(nextSnapshot);
           setSettings(nextSettings);
+          setCameraState((current) => current.generation > nextCameraState.generation ? current : nextCameraState);
         }
       })
       .catch((reason) => {
@@ -669,6 +767,8 @@ export function App(): ReactElement {
 
     const unsubscribe = window.pomodoro.subscribe((event: CoreEvent) => {
       if (event.type === "timer.snapshot") setSnapshot(event.snapshot);
+      if (event.type === "camera.state") setCameraState((current) => current.generation > event.state.generation ? current : event.state);
+      if (event.type === "settings.changed") setSettings(event.settings);
       if (event.type === "stats.changed") {
         ++statisticsRequest.current;
         setStatistics(event.statistics);
@@ -685,6 +785,25 @@ export function App(): ReactElement {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!cameraState.enabled || fatalError) return;
+    let active = true;
+    const stop = startCameraPresence(async (presence) => {
+      if (active) await window.pomodoro.reportCameraPresence(presence, cameraState.generation);
+    }, (message) => {
+      if (!active) return;
+      setOperationError(message);
+      void window.pomodoro.reportCameraPresence("unknown", cameraState.generation).catch(() => {
+        // 领域：Camera / IPC 故障
+        // 顺序：Renderer 故障上报失败 -> Main 心跳期限 -> 触控回退。
+        // 作用：跨进程中断时等待 Main 的安全回退。
+        // 原因：前端不能自行决定权威计时或持久化模式。
+        // 边界：本地摄像头已由 controller 释放，不在此重复启动。
+      });
+    });
+    return () => { active = false; stop(); };
+  }, [cameraState.enabled, cameraState.generation, fatalError]);
 
   useEffect(() => {
     if (!settings) return;
@@ -736,10 +855,12 @@ export function App(): ReactElement {
   return <div className="appShell">
     {operationError && <div className="operationError" role="alert"><span>{operationError}</span>
       <button type="button" aria-label="关闭错误提示" onClick={() => setOperationError(null)}>关闭</button></div>}
-    {view === "settings" ? <SettingsView settings={settings} onSave={saveSettings} onBack={() => setView("timer")} />
+    {view === "settings" ? <SettingsView settings={settings} onSave={saveSettings} onBack={() => setView("timer")}
+      onModeChange={(source) => void changeMode(source)} modeChanging={modeChanging} />
       : view === "stats" ? <StatsView statistics={statistics} settings={settings} error={statisticsError}
         onRetry={() => void syncStats()} onBack={() => setView("timer")} />
         : <TimerView snapshot={snapshot} settings={settings}
+          onModeChange={(source) => void changeMode(source)} modeChanging={modeChanging}
           onCommand={(command) => void runCommand(command)} onView={setView} />}
   </div>;
 }

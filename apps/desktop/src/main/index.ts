@@ -2,7 +2,9 @@ import { realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, Menu, Notification, nativeImage, nativeTheme, powerMonitor, screen, Tray, ipcMain, type IpcMainInvokeEvent, type NativeImage } from "electron";
-import { capabilitiesSchema, coreEventSchema, settingsPatchSchema, settingsSchema, timerCommandSchema, timerSnapshotSchema, type CoreEvent, type TimerSnapshot } from "../shared/contracts.js";
+import { cameraPresenceReportSchema, cameraStateSchema, capabilitiesSchema, coreEventSchema, settingsPatchSchema, settingsSchema, timerCommandSchema, timerSnapshotSchema, type CoreEvent, type TimerSnapshot } from "../shared/contracts.js";
+import { CameraMonitor } from "./camera-monitor.js";
+import { allowsCameraPermission } from "./camera-permission.js";
 import { SqliteStore, StoreRecoveryError, rebuildSqliteStore } from "./store.js";
 import { TimerEngine } from "./timer.js";
 import { WindowLayout, initialContentSize, windowsCaptionHeight } from "./window-layout.js";
@@ -16,6 +18,10 @@ let engine: TimerEngine | undefined;
 let monitorTimer: NodeJS.Timeout | undefined;
 let tickTimer: NodeJS.Timeout | undefined;
 let quitting = false;
+const camera = new CameraMonitor();
+let suspended = false;
+let screenLocked = false;
+let rendererReady = false;
 let runtimeFailure: Error | undefined;
 let lastCompletedRoundRevision = 0;
 let lastStatisticsRevision = 0;
@@ -64,10 +70,35 @@ if (process.env["POMODORO_DIAGNOSTICS"] === "1") {
   Object.defineProperty(globalThis, Symbol.for("pomodoro.desktop.inspect"), { value: inspectDesktopRuntime });
 }
 
-const capabilities = capabilitiesSchema.parse({ inputMonitoring: process.platform === "darwin" || process.platform === "win32", cameraPresence: false, standingFocus: false });
+const capabilities = capabilitiesSchema.parse({ inputMonitoring: process.platform === "darwin" || process.platform === "win32", cameraPresence: process.platform === "darwin" || process.platform === "win32", standingFocus: false });
 
-function assertSender(event: IpcMainInvokeEvent): void { if (event.sender.id !== mainWindow?.webContents.id) throw new Error("不支持的 IPC 调用来源"); }
+function assertSender(event: IpcMainInvokeEvent): void { if (event.sender.id !== mainWindow?.webContents.id || event.senderFrame !== event.sender.mainFrame) throw new Error("不支持的 IPC 调用来源"); }
 function currentEngine(): TimerEngine { if (!engine) throw new Error("计时核心尚未初始化"); return engine; }
+function rendererUrl(): string { return new URL(process.env["ELECTRON_RENDERER_URL"] ?? pathToFileURL(join(__dirname, "../renderer/index.html")).toString()).href; }
+function syncCamera(): void {
+  const enabled = capabilities.cameraPresence && currentEngine().settings.focusPresenceSource === "camera"
+    && rendererReady && !suspended && !screenLocked && !runtimeFailure && !quitting;
+  if (camera.setEnabled(enabled, performance.now())) {
+    publishSnapshot(currentEngine().cameraSample("unknown"));
+    broadcast({ type: "camera.state", state: camera.state });
+  }
+}
+function sampleInput(): void {
+  if (suspended) return;
+  let idle: number | undefined;
+  let available = capabilities.inputMonitoring;
+  if (available) { try { idle = powerMonitor.getSystemIdleTime(); } catch { available = false; } }
+  publishSnapshot(currentEngine().inputSample(idle, available));
+}
+function fallbackCamera(message: string): void {
+  if (currentEngine().settings.focusPresenceSource !== "camera") return;
+  publishSnapshot(currentEngine().cameraSample("unknown"));
+  const settings = currentEngine().applySettings({ focusPresenceSource: "input" });
+  syncCamera();
+  broadcast({ type: "settings.changed", settings });
+  sampleInput();
+  broadcast({ type: "core.error", code: "CAMERA_UNAVAILABLE", message: `${message}，已切回触控感知。可检查系统摄像头权限后重新选择监控。`, recoverable: true });
+}
 function formatRemaining(ms: number): string { const seconds = Math.ceil(ms / 1000); return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`; }
 function broadcast(event: CoreEvent): void { const safe = coreEventSchema.parse(event); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("pomodoro:event", safe); if (safe.type === "timer.snapshot") updateTray(safe.snapshot); }
 function statistics() {
@@ -119,6 +150,7 @@ function updateTray(snapshot: TimerSnapshot): void {
 function failRuntime(reason: unknown): void {
   if (runtimeFailure) return;
   runtimeFailure = new Error(`本地数据不可用，计时已安全暂停。请重新打开应用重试。${reason instanceof Error ? ` ${reason.message}` : ""}`);
+  if (camera.setEnabled(false, performance.now())) broadcast({ type: "camera.state", state: camera.state });
   if (monitorTimer) clearInterval(monitorTimer);
   if (tickTimer) clearInterval(tickTimer);
   if (engine) broadcast({ type: "timer.snapshot", snapshot: engine.storageFailure() });
@@ -171,7 +203,7 @@ function createWindow(): BrowserWindow {
     ...(windows ? { titleBarOverlay: windowsCaption() } : {}),
     ...(macOS ? { trafficLightPosition: { x: 14, y: 14 } } : {}),
     backgroundColor: "#f6f3ee",
-    webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
+    webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, backgroundThrottling: false },
   });
   if (windows) {
     window.removeMenu();
@@ -186,11 +218,28 @@ function createWindow(): BrowserWindow {
   window.once("ready-to-show", () => window.show());
   window.on("close", (event) => { windowLayout.remember(window); if (!quitting && process.platform !== "darwin") { event.preventDefault(); window.hide(); } });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const rendererUrl = process.env["ELECTRON_RENDERER_URL"] ?? pathToFileURL(join(__dirname, "../renderer/index.html")).toString();
-  window.webContents.on("will-navigate", (event, url) => {
-    if (url !== rendererUrl) event.preventDefault();
+  // 领域：Electron / 媒体权限
+  // 顺序：Renderer getUserMedia -> Session 权限校验 -> OS 摄像头授权。
+  // 作用：仅允许主窗口主 frame 在用户启用监控时请求视频。
+  // 原因：默认 Electron 授权策略不能代替应用的模式和来源校验。
+  // 边界：拒绝音频、外部 frame 和其他权限，不扩大 preload 能力。
+  window.webContents.session.setPermissionCheckHandler((contents, permission, _origin, details) =>
+    allowsCameraPermission({ enabled: camera.state.enabled, permission, expectedContentsId: window.webContents.id,
+      contentsId: contents?.id, isMainFrame: details.isMainFrame, requestingUrl: details.requestingUrl,
+      rendererUrl: rendererUrl(), mediaTypes: details.mediaType ? [details.mediaType] : undefined }));
+  window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    callback(allowsCameraPermission({ enabled: camera.state.enabled, permission, expectedContentsId: window.webContents.id,
+      contentsId: contents.id, isMainFrame: details.isMainFrame, requestingUrl: details.requestingUrl,
+      rendererUrl: rendererUrl(), mediaTypes: "mediaTypes" in details ? details.mediaTypes : undefined }));
   });
-  void window.loadURL(rendererUrl);
+  window.webContents.on("did-start-loading", () => backgroundOperation(() => { rendererReady = false; syncCamera(); }));
+  window.webContents.on("did-finish-load", () => backgroundOperation(() => { rendererReady = true; syncCamera(); }));
+  window.webContents.on("render-process-gone", () => { if (!quitting) backgroundOperation(() => { rendererReady = false; fallbackCamera("摄像头检测窗口已中断"); }); });
+  window.once("closed", () => { if (!quitting) backgroundOperation(() => { rendererReady = false; fallbackCamera("摄像头检测窗口已关闭"); }); });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url !== rendererUrl()) event.preventDefault();
+  });
+  void window.loadURL(rendererUrl());
   return window;
 }
 function showWindow(): void { if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow(); else { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } }
@@ -198,13 +247,32 @@ function installIpc(): void {
   ipcMain.handle("pomodoro:get-snapshot", (event) => { assertSender(event); if (runtimeFailure) throw runtimeFailure; return coreOperation(() => { const snapshot = currentEngine().snapshot; publishSnapshot(snapshot); return timerSnapshotSchema.parse(snapshot); }); });
   ipcMain.handle("pomodoro:get-settings", (event) => { assertSender(event); return settingsSchema.parse(currentEngine().settings); });
   ipcMain.handle("pomodoro:get-capabilities", (event) => { assertSender(event); return capabilities; });
+  ipcMain.handle("pomodoro:get-camera-state", (event) => { assertSender(event); return cameraStateSchema.parse(camera.state); });
+  ipcMain.handle("pomodoro:report-camera-presence", (event, raw: unknown) => {
+    assertSender(event);
+    const report = cameraPresenceReportSchema.parse(raw);
+    if (runtimeFailure) throw runtimeFailure;
+    if (camera.expired(performance.now())) {
+      coreOperation(() => fallbackCamera("摄像头检测响应超时"));
+      throw new Error("摄像头检测响应超时");
+    }
+    camera.report(report.generation, performance.now());
+    return coreOperation(() => {
+      if (report.presence === "unknown") fallbackCamera("摄像头不可用或检测中断");
+      else publishSnapshot(currentEngine().cameraSample(report.presence));
+      return timerSnapshotSchema.parse(currentEngine().snapshot);
+    });
+  });
   ipcMain.handle("pomodoro:get-statistics", (event) => { assertSender(event); return coreOperation(() => statistics()); });
   ipcMain.handle("pomodoro:command", (event, raw: unknown) => { assertSender(event); return runCommand(timerCommandSchema.parse(raw)); });
   ipcMain.handle("pomodoro:update-settings", (event, raw: unknown) => {
     assertSender(event);
     const patch = settingsPatchSchema.parse(raw);
+    if (patch.focusPresenceSource === "camera" && !capabilities.cameraPresence) throw new Error("当前平台不支持摄像头感知");
     return coreOperation(() => {
       const settings = currentEngine().applySettings(patch);
+      syncCamera();
+      broadcast({ type: "settings.changed", settings });
       mainWindow?.setAlwaysOnTop(settings.alwaysOnTop);
       if (process.platform === "win32" && patch.theme) mainWindow?.setTitleBarOverlay(windowsCaption());
       publishSnapshot();
@@ -214,22 +282,13 @@ function installIpc(): void {
 }
 function startMonitoring(): void {
   monitorTimer = setInterval(() => {
-    let idle: number | undefined;
-    let available = capabilities.inputMonitoring;
-    if (available) {
-      try {
-        idle = powerMonitor.getSystemIdleTime();
-      } catch {
-        available = false;
-      }
-    }
-    backgroundOperation(() => publishSnapshot(currentEngine().inputSample(idle, available)));
+    backgroundOperation(() => { if (camera.expired(performance.now())) fallbackCamera("摄像头检测响应超时"); sampleInput(); });
   }, 1000);
-  tickTimer = setInterval(() => backgroundOperation(() => publishSnapshot()), 500);
-  powerMonitor.on("suspend", () => backgroundOperation(() => { publishSnapshot(currentEngine().systemSuspend()); notify("计时已暂停", "系统进入睡眠，恢复后等待安全条件继续计时"); }));
-  powerMonitor.on("resume", () => backgroundOperation(() => publishSnapshot()));
-  powerMonitor.on("lock-screen", () => backgroundOperation(() => publishSnapshot(currentEngine().systemLock())));
-  powerMonitor.on("unlock-screen", () => backgroundOperation(() => publishSnapshot(currentEngine().systemUnlock())));
+  tickTimer = setInterval(() => backgroundOperation(() => { if (camera.expired(performance.now())) fallbackCamera("摄像头检测响应超时"); publishSnapshot(); }), 500);
+  powerMonitor.on("suspend", () => backgroundOperation(() => { suspended = true; publishSnapshot(currentEngine().systemSuspend()); syncCamera(); notify("计时已暂停", "系统进入睡眠，恢复后等待安全条件继续计时"); }));
+  powerMonitor.on("resume", () => backgroundOperation(() => { suspended = false; syncCamera(); publishSnapshot(); }));
+  powerMonitor.on("lock-screen", () => backgroundOperation(() => { screenLocked = true; publishSnapshot(currentEngine().systemLock()); syncCamera(); }));
+  powerMonitor.on("unlock-screen", () => backgroundOperation(() => { screenLocked = false; publishSnapshot(currentEngine().systemUnlock()); syncCamera(); }));
 }
 app.whenReady().then(() => {
   if (!ownsInstanceLock) return;

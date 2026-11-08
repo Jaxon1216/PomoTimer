@@ -11,3 +11,5 @@ diagnostics/
 .DS_Store
 .trae/
 *.tsbuildinfo
+apps/desktop/resources/camera/mediapipe/vision_wasm_*
+apps/desktop/resources/camera/mediapipe/LICENSE.txt

@@ -266,6 +266,8 @@ select:focus-visible {
   background: color-mix(in srgb, var(--foreground) 9%, transparent);
 }
 
+.presenceModeButton:disabled { opacity: 0.5; cursor: wait; }
+
 .timerStage {
   display: grid;
   width: 100%;
@@ -485,8 +487,9 @@ select:focus-visible {
 
 .roundSequence span {
   height: 3px;
-  min-width: 2px;
-  flex: 1;
+  min-width: 0;
+  flex-basis: 0;
+  flex-shrink: 1;
   border-radius: 2px;
   background: var(--track);
 }
@@ -1184,6 +1187,11 @@ input[aria-invalid="true"] {
   .monitorStatus[data-available="true"] {
     display: none;
   }
+}
+
+@container timer-window (max-width: 265px) {
+  .titleActions { gap: 1px; }
+  .titleActions .iconButton { width: 22px; }
 }
 
 @media (max-width: 240px) {

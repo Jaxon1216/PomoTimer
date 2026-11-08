@@ -10,7 +10,7 @@ export const presenceSourceSchema = z.enum(["input", "camera"]);
 export type PresenceSource = z.infer<typeof presenceSourceSchema>;
 export const breakModeSchema = z.enum(["active", "desk"]);
 export type BreakMode = z.infer<typeof breakModeSchema>;
-export const pauseReasonSchema = z.enum(["none", "input-away", "break-condition", "system-suspend", "system-lock", "core-recovery", "source-unavailable", "storage-unavailable"]);
+export const pauseReasonSchema = z.enum(["none", "input-away", "camera-away", "break-condition", "system-suspend", "system-lock", "core-recovery", "source-unavailable", "storage-unavailable"]);
 export type PauseReason = z.infer<typeof pauseReasonSchema>;
 
 export const roundSchema = z.object({
@@ -23,12 +23,19 @@ export const roundSchema = z.object({
 }).strict();
 export type Round = z.infer<typeof roundSchema>;
 
+export const breakPreparationSchema = z.object({
+  remainingSeconds: z.number().int().positive(),
+  countdown: z.boolean(),
+}).strict();
+export type BreakPreparation = z.infer<typeof breakPreparationSchema>;
+
 export const automationStateSchema = z.object({
   activePresenceSource: presenceSourceSchema,
   inputPresence: presenceSchema,
-  cameraPresence: z.literal("unknown"),
+  cameraPresence: presenceSchema,
   inputMonitoringAvailable: z.boolean(),
-  cameraMonitoringAvailable: z.literal(false),
+  cameraMonitoringAvailable: z.boolean(),
+  breakPreparation: breakPreparationSchema.nullable().optional(),
   manualPauseLocked: z.boolean(),
   pauseReason: pauseReasonSchema,
 }).strict();
@@ -62,7 +69,7 @@ export const settingsSchema = z.object({
   longBreakDurationSeconds: z.number().int().min(60).max(5400),
   focusRoundsPerCycle: z.number().int().min(1).max(8),
   inputIdleThresholdSeconds: z.number().int().min(10).max(600),
-  focusPresenceSource: z.literal("input"),
+  focusPresenceSource: presenceSourceSchema,
   defaultBreakMode: breakModeSchema,
   theme: z.enum(["light", "dark", "system"]),
   alwaysOnTop: z.boolean(),
@@ -82,12 +89,23 @@ export const statisticsSnapshotSchema = z.object({
 }).strict();
 export type StatisticsSnapshot = z.infer<typeof statisticsSnapshotSchema>;
 
-export const capabilitiesSchema = z.object({ inputMonitoring: z.boolean(), cameraPresence: z.literal(false), standingFocus: z.literal(false) }).strict();
+export const capabilitiesSchema = z.object({ inputMonitoring: z.boolean(), cameraPresence: z.boolean(), standingFocus: z.literal(false) }).strict();
 export type Capabilities = z.infer<typeof capabilitiesSchema>;
 export const timerCommandSchema = z.enum(["start", "pause", "resume", "next", "reset"]);
 export type TimerCommand = z.infer<typeof timerCommandSchema>;
+// 领域：Electron / 摄像头会话契约
+// 顺序：Main 会话更新 -> Preload -> Renderer 检测 -> 带代次的 presence 回报。
+// 作用：以 Main 分配的代次隔离模式切换、睡眠和窗口重建前的迟到结果。
+// 原因：旧会话的在场结果不能使新会话自动恢复计时。
+// 边界：只允许在场三态和代次，帧、身份或其他附加字段均被拒绝。
+export const cameraStateSchema = z.object({ enabled: z.boolean(), generation: z.number().int().nonnegative() }).strict();
+export type CameraState = z.infer<typeof cameraStateSchema>;
+export const cameraPresenceReportSchema = z.object({ presence: presenceSchema, generation: z.number().int().nonnegative() }).strict();
+
 export const coreEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("timer.snapshot"), snapshot: timerSnapshotSchema }).strict(),
+  z.object({ type: z.literal("camera.state"), state: cameraStateSchema }).strict(),
+  z.object({ type: z.literal("settings.changed"), settings: settingsSchema }).strict(),
   z.object({ type: z.literal("stats.changed"), statistics: statisticsSnapshotSchema }).strict(),
   z.object({ type: z.literal("core.error"), code: z.string(), message: z.string(), recoverable: z.boolean() }).strict(),
 ]);
@@ -99,6 +117,8 @@ export interface PomodoroApi {
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
   getCapabilities(): Promise<Capabilities>;
+  getCameraState(): Promise<CameraState>;
+  reportCameraPresence(presence: Presence, generation: number): Promise<TimerSnapshot>;
   getStatistics(): Promise<StatisticsSnapshot>;
   subscribe(listener: (event: CoreEvent) => void): () => void;
 }
