@@ -84,6 +84,7 @@ function syncCamera(): void {
   }
 }
 function sampleInput(): void {
+  if (suspended) return;
   let idle: number | undefined;
   let available = capabilities.inputMonitoring;
   if (available) { try { idle = powerMonitor.getSystemIdleTime(); } catch { available = false; } }

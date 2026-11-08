@@ -23,12 +23,19 @@ export const roundSchema = z.object({
 }).strict();
 export type Round = z.infer<typeof roundSchema>;
 
+export const breakPreparationSchema = z.object({
+  remainingSeconds: z.number().int().positive(),
+  countdown: z.boolean(),
+}).strict();
+export type BreakPreparation = z.infer<typeof breakPreparationSchema>;
+
 export const automationStateSchema = z.object({
   activePresenceSource: presenceSourceSchema,
   inputPresence: presenceSchema,
   cameraPresence: presenceSchema,
   inputMonitoringAvailable: z.boolean(),
   cameraMonitoringAvailable: z.boolean(),
+  breakPreparation: breakPreparationSchema.nullable().optional(),
   manualPauseLocked: z.boolean(),
   pauseReason: pauseReasonSchema,
 }).strict();
