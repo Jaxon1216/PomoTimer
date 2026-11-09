@@ -28,6 +28,8 @@ interface Capabilities { inputMonitoring: boolean; cameraPresence: boolean; stan
 
 窗口拖动和尺寸约束由原生窗口处理，Renderer 根据视口尺寸排版。这些操作独立于计时命令、事件和持久化。
 
+窗口重建只恢复已知页面 fragment：`timer`、`settings`、`stats`，不新增 preload 方法或通用窗口控制 channel。恢复后的主窗口仍须通过相同来源、主 frame 和 Zod 校验。
+
 ## 2. TimerSnapshot
 
 ```ts
@@ -50,6 +52,20 @@ interface TimerSnapshot {
 ## 3. 设置生效
 
 设置范围与产品规格一致：专注 300–7200 秒、短休 60–3600 秒、长休 60–5400 秒、周期 1–8 轮、输入阈值 10–600 秒。主题和常驻顶部立即生效；时长在下一轮同类型轮次生效，周期轮数在下一周期生效，休息模式在下一轮休息生效，输入阈值在下一采样生效。
+
+窗口设置包含三个独立布尔字段：
+
+```ts
+interface WindowSettings {
+  alwaysOnTop: boolean;
+  followWorkspaces: boolean;
+  autoFade: boolean;
+}
+```
+
+这些字段属于完整 `Settings`，不是新增 IPC 对象。新安装均为 `true`；`followWorkspaces` 仅在 macOS 生效。常驻顶部保持普通悬浮层级，自动淡化立即用于计时器页；macOS 跟随变化在保存回复后异步重建窗口，恢复位置、尺寸和页面，不新建 TimerEngine 或 Store。计划内重建使摄像头旧代次失效并暂时 `unknown`，保留选中的感知模式；新窗口重新初始化并等待有效样本。
+
+`Settings` 和 `SettingsPatch` 保持严格校验，未知字段和非布尔窗口选项均拒绝。patch 中没有出现的字段保持原值，不能因为默认值而随其他设置一起重置。仅 Store 读取旧设置时允许缺少 `followWorkspaces` 或 `autoFade`，分别补 `true`；原有 `alwaysOnTop` 与任何已保存的显式 `false` 保持不变，错误类型仍进入数据恢复路径。
 
 `focusPresenceSource: "input" | "camera"` 默认 `input`，它同时选择专注和活动休息的感知源。改变来源立即清除旧摄像头在场状态；当前轮次实际来源变化时，取消临时手动回退、清空准备状态并安全暂停活动轮次，等待新源样本。不重置计时，不解除专注的手动暂停锁；桌前休息的输入规则不因该设置变化而改变。监控专注只在有效 `present` 时开始/继续，监控活动休息只在有效 `away` 时开始/继续。摄像头故障由 Main 保存回退后的 `input` 设置，并通过 `settings.changed` 通知 Renderer；用户重新选择监控才重试。
 
@@ -75,6 +91,8 @@ Main 每 500ms 广播权威快照。命令、输入/摄像头采样、轮次变�
 保留并兼容既有表：`schema_migrations`、`settings`、单行 `timer_snapshot`、`completed_focus_sessions`。只有完整结束的 focus 写入 `completed_focus_sessions`。完成记录使用由周期和专注轮次生成的稳定 ID，`INSERT OR IGNORE` 防止重试重复计数。统计按 `local_date` 聚合今日、本周和最近 52 周数据。
 
 `TimerSnapshot` 是运行时 IPC 契约。闲置秒数只在 Main 内存中使用，Renderer 通过实时快照读取推断出的在场状态。摄像头帧只在 Renderer 瞬时处理，三态和代次只在内存中使用。SQLite 的计时检查点只保存恢复轮次所需的数据，普通检查点与完成专注的事务使用同一写入格式，不保存 `automation`、presence、休息准备倒数、摄像头代次或检测历史。设置中可保存选中的专注源，沿用版本 1 设置格式，不改动已发布的数据库迁移。重启后，两种在场状态均为 `unknown`，休息准备状态为 `null`，直到收到有效样本。旧检查点中的 `manual-paused` 休息轮转为自动等待，剩余时间保持不变；专注的手动暂停锁继续保留。升级时，可读取的旧检查点转换为新格式，设置和完成记录继续保留。既有备份和故障恢复归档按原样保存，可能包含旧版本写入的字段。
+
+`alwaysOnTop`、`followWorkspaces`、`autoFade` 随版本 1 的设置 JSON 保存；兼容补值发生在 Store 读取边界，不改写已发布的迁移或校验和。淡化计时器、指针状态、键盘焦点与当前页面不写入 SQLite。
 
 Store 每次打开数据库都会尝试将 WAL 合入主文件并截断。若外部读取连接仍占用旧页，逻辑检查点已完成转换，旧页清理会在下次打开时重试。此时复制的原始文件也可能包含旧版本的数据。
 

@@ -266,6 +266,11 @@ test("starts through the restricted preload bridge and preserves native settings
   // A cold Windows runner can still be loading the renderer after the default
   // interactive assertion timeout; startup has its own bounded budget.
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible({ timeout: 15_000 });
+  expect(await window.evaluate(() => window.pomodoro.getSettings())).toMatchObject({
+    alwaysOnTop: true, followWorkspaces: true, autoFade: true,
+  });
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(true);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(process.platform === "darwin");
   await expect(window.locator("time")).toHaveText("30:00");
   await settleVisuals(window);
   await assertTimerLayout(window, "vertical");
@@ -314,6 +319,157 @@ test("starts through the restricted preload bridge and preserves native settings
   const restarted = await launchApplication(userDataDirectory);
   expect(await restarted.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(true);
   await restarted.close();
+});
+
+test("keeps the timer and independent settings while macOS desktop following replaces windows", async ({ launchApplication }, testInfo) => {
+  test.skip(process.platform !== "darwin", "macOS Spaces and panel replacement are platform-specific");
+  test.setTimeout(60_000);
+  const userDataDirectory = testInfo.outputPath("user-data");
+  const app = await launchApplication(userDataDirectory);
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  let window = await app.firstWindow();
+  await expect(window.getByRole("heading", { name: "专注" })).toBeVisible({ timeout: 15_000 });
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await expect(window.locator("time")).not.toHaveText("30:00");
+  await window.getByRole("button", { name: "暂停计时" }).click();
+  const paused = await window.evaluate(() => window.pomodoro.getSnapshot());
+  expect(paused.status).toBe("manual-paused");
+  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(320, 400); });
+
+  await openMore(window);
+  await window.getByRole("menuitem", { name: "打开设置" }).click();
+  await window.getByRole("checkbox", { name: "常驻顶部" }).uncheck();
+  await window.getByRole("checkbox", { name: "自动淡化" }).uncheck();
+  await window.getByRole("button", { name: "保存设置" }).click();
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(false);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(true);
+
+  for (const following of [false, true]) {
+    const oldWindow = window;
+    await window.getByRole("checkbox", { name: "跟随桌面与全屏" }).setChecked(following);
+    const replacement = app.waitForEvent("window");
+    await window.getByRole("button", { name: "保存设置" }).click();
+    window = await replacement;
+    await expect(window.getByRole("heading", { name: "设置" })).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => oldWindow.isClosed()).toBe(true);
+    await expect(window.getByRole("checkbox", { name: "跟随桌面与全屏" })).toBeChecked({ checked: following });
+    await expect(window.getByRole("checkbox", { name: "常驻顶部" })).not.toBeChecked();
+    await expect(window.getByRole("checkbox", { name: "自动淡化" })).not.toBeChecked();
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(following);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(false);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getContentSize())).toEqual([320, 400]);
+    expect(await app.evaluate(({ app }) => app.dock?.isVisible())).toBe(true);
+    expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+      status: paused.status, remainingMs: paused.remainingMs, round: paused.round,
+      automation: { manualPauseLocked: true },
+    });
+  }
+
+  const closed = window.waitForEvent("close");
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
+  await closed;
+  const reopened = app.waitForEvent("window");
+  await app.evaluate(({ app }) => { app.emit("activate"); });
+  window = await reopened;
+  await window.waitForFunction(() => Boolean(window.pomodoro));
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: paused.status, remainingMs: paused.remainingMs, round: paused.round,
+  });
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(true);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(false);
+  expect(await app.evaluate(({ app }) => app.dock?.isVisible())).toBe(true);
+  await app.close();
+
+  const restarted = await launchApplication(userDataDirectory);
+  const restoredWindow = await restarted.firstWindow();
+  await restoredWindow.waitForFunction(() => Boolean(window.pomodoro));
+  expect(await restoredWindow.evaluate(() => window.pomodoro.getSettings())).toMatchObject({
+    alwaysOnTop: false, followWorkspaces: true, autoFade: false,
+  });
+  expect(await restarted.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(true);
+  expect(await restarted.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(false);
+  expect(await restarted.evaluate(({ app }) => app.dock?.isVisible())).toBe(true);
+  await restarted.close();
+});
+
+test("fades timer chrome after leaving while retaining readable controls and native window opacity", async ({ launchApplication }, testInfo) => {
+  const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  const timer = window.locator(".timerSurface");
+  await expect(timer).toBeVisible({ timeout: 15_000 });
+  await settleVisuals(window);
+  const snapshot = await window.evaluate(() => window.pomodoro.getSnapshot());
+  await window.mouse.move(180, 180);
+  await expect(timer).toHaveAttribute("data-faded", "false");
+  await window.mouse.move(-8, -8);
+  await expect(timer).toHaveAttribute("data-faded", "true", { timeout: 4_000 });
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getOpacity())).toBe(1);
+  const opacity = await timer.evaluate((surface) => {
+    const read = (selector: string) => Number(getComputedStyle(surface.querySelector(selector)!).opacity);
+    return { time: read("time"), status: read(".statePill"), action: read(".timerControls .primary"), brand: read(".brand") };
+  });
+  expect(opacity).toMatchObject({ time: 1, status: 1, action: 1 });
+  expect(opacity.brand).toBeLessThan(1);
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: snapshot.status, remainingMs: snapshot.remainingMs, round: snapshot.round,
+  });
+  await window.mouse.move(180, 180);
+  await expect(timer).toHaveAttribute("data-faded", "false");
+  await window.getByRole("button", { name: "打开统计" }).click();
+  await expect(window.getByRole("heading", { name: "统计" })).toBeVisible();
+  await expect(window.locator("[data-faded]")).toHaveCount(0);
+  await app.close();
+});
+
+test("retains the working window when macOS replacement fails to load and retries the saved preference", async ({ launchApplication }, testInfo) => {
+  test.skip(process.platform !== "darwin", "Only macOS replaces its native window when desktop following changes");
+  const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  await expect(window.getByRole("heading", { name: "专注" })).toBeVisible({ timeout: 15_000 });
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await window.getByRole("button", { name: "暂停计时" }).click();
+  const paused = await window.evaluate(() => window.pomodoro.getSnapshot());
+  await openMore(window);
+  await window.getByRole("menuitem", { name: "打开设置" }).click();
+  await window.evaluate(() => {
+    window.pomodoro.subscribe((event) => {
+      if (event.type === "core.error" && event.code === "WINDOW_REPLACEMENT_FAILED") Reflect.set(globalThis, "replacementError", event);
+    });
+  });
+  await app.evaluate(({ BrowserWindow }) => {
+    const loadURL = BrowserWindow.prototype.loadURL;
+    BrowserWindow.prototype.loadURL = function () {
+      BrowserWindow.prototype.loadURL = loadURL;
+      return Promise.reject(new Error("Injected replacement page load failure"));
+    };
+  });
+  await window.getByRole("checkbox", { name: "跟随桌面与全屏" }).uncheck();
+  await window.getByRole("button", { name: "保存设置" }).click();
+  await expect(window.getByText("窗口切换未完成，已保留原窗口。请重试保存设置或重新打开窗口。", { exact: true })).toBeVisible();
+  expect(window.isClosed()).toBe(false);
+  expect(await window.evaluate(() => Reflect.get(globalThis, "replacementError"))).toMatchObject({
+    type: "core.error", code: "WINDOW_REPLACEMENT_FAILED", recoverable: true,
+  });
+  expect(await window.evaluate(() => window.pomodoro.getSettings())).toMatchObject({ followWorkspaces: false });
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: paused.status, remainingMs: paused.remainingMs, round: paused.round,
+  });
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  expect(await app.evaluate(({ app }) => app.dock?.isVisible())).toBe(true);
+
+  const replacement = app.waitForEvent("window");
+  await window.getByRole("button", { name: "保存设置" }).click();
+  const retriedWindow = await replacement;
+  await expect(retriedWindow.getByRole("heading", { name: "设置" })).toBeVisible({ timeout: 15_000 });
+  await expect.poll(() => window.isClosed()).toBe(true);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(false);
+  expect(await retriedWindow.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: paused.status, remainingMs: paused.remainingMs, round: paused.round,
+  });
+  await app.close();
 });
 
 test("limits tall windows while keeping short and wide timer layouts available", async ({ launchApplication, windowsHitTestExecutable }, testInfo) => {

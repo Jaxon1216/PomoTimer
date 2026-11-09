@@ -44,6 +44,62 @@ function backupContents(directory: string): Record<string, Buffer> {
   return Object.fromEntries(readdirSync(directory).map((file) => [file, readFileSync(join(directory, file))]));
 }
 
+test("new installations enable all appearance options and persist independent opt-outs", () => withDirectory((directory) => {
+  const store = new SqliteStore(directory);
+  const selected = { ...defaultSettings, alwaysOnTop: false, followWorkspaces: false, autoFade: false };
+  try {
+    const initial = store.loadSettings();
+    assert.equal(initial.alwaysOnTop, true);
+    assert.equal(initial.followWorkspaces, true);
+    assert.equal(initial.autoFade, true);
+    store.saveSettings(selected);
+  } finally { store.close(); }
+  const reopened = new SqliteStore(directory);
+  try {
+    assert.deepEqual(reopened.loadSettings(), selected);
+    reopened.saveSettings({ ...selected, followWorkspaces: true });
+    assert.deepEqual(reopened.loadSettings(), { ...selected, followWorkspaces: true });
+  } finally { reopened.close(); }
+}));
+
+for (const alwaysOnTop of [false, true]) {
+  test(`old settings retain alwaysOnTop=${alwaysOnTop} and enable only the missing appearance fields`, () => withDirectory((directory) => {
+    const legacy = new Database(join(directory, "pomodoro.sqlite"));
+    legacy.exec(legacySchema);
+    const previous = Object.fromEntries(Object.entries({ ...defaultSettings, alwaysOnTop, theme: "dark", focusDurationSeconds: 1500 })
+      .filter(([key]) => key !== "followWorkspaces" && key !== "autoFade"));
+    const previousJson = JSON.stringify(previous);
+    legacy.prepare("INSERT INTO settings VALUES('settings',?,?)").run(previousJson, "2026-10-22T00:00:00.000Z");
+    legacy.close();
+    const store = new SqliteStore(directory);
+    try {
+      assert.deepEqual(store.loadSettings(), { ...defaultSettings, alwaysOnTop, theme: "dark", focusDurationSeconds: 1500 });
+      const reader = new Database(join(directory, "pomodoro.sqlite"));
+      try {
+        assert.deepEqual(reader.prepare("SELECT value_json FROM settings WHERE key='settings'").get(), { value_json: previousJson });
+      } finally { reader.close(); }
+      store.saveSettings({ ...store.loadSettings(), autoFade: false });
+    } finally { store.close(); }
+    const reopened = new SqliteStore(directory);
+    try {
+      assert.deepEqual(reopened.loadSettings(), { ...defaultSettings, alwaysOnTop, theme: "dark", focusDurationSeconds: 1500, autoFade: false });
+    } finally { reopened.close(); }
+  }));
+}
+
+for (const field of ["followWorkspaces", "autoFade"] as const) {
+  test(`malformed stored ${field} is backed up instead of silently defaulted`, () => withDirectory((directory) => {
+    const store = new SqliteStore(directory);
+    const writer = new Database(join(directory, "pomodoro.sqlite"));
+    try {
+      writer.prepare("INSERT INTO settings VALUES('settings',?,?)").run(JSON.stringify({ ...defaultSettings, [field]: null }), "2026-10-22T00:00:00.000Z");
+      const recovery = captureRecovery(() => store.loadSettings());
+      assert.ok(recovery.backupDirectory);
+      assert.match(recovery.message, new RegExp(field));
+    } finally { writer.close(); store.close(); }
+  }));
+}
+
 test("upgrades the original four-table schema without changing its checksum or existing records", () => withDirectory((directory) => {
   const legacy = new Database(join(directory, "pomodoro.sqlite"));
   legacy.exec(legacySchema);

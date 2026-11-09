@@ -15,6 +15,16 @@ const migrationChecksum = "electron-sqlite-v3-timer-state";
 const privateCheckpointChecksum = "electron-sqlite-v4-private-checkpoint";
 const snapshotSchemaVersion = 4;
 
+// 领域：SQLite / 设置兼容
+// 顺序：旧设置 JSON -> Store 读取校验 -> 完整 Settings -> Main IPC。
+// 作用：仅为旧库缺少的桌面跟随和淡化选项补默认值。
+// 原因：保留用户已保存的置顶选择，且不能让 IPC patch 自动添加未修改字段。
+// 边界：不覆盖显式 false，不接受未知字段或错误类型，不改已发布迁移。
+const storedSettingsSchema = settingsSchema.extend({
+  followWorkspaces: settingsSchema.shape.followWorkspaces.default(true),
+  autoFade: settingsSchema.shape.autoFade.default(true),
+});
+
 function parseCheckpointJson(json: string): unknown {
   try { return JSON.parse(json) as unknown; } catch { throw new Error("计时快照损坏"); }
 }
@@ -82,7 +92,7 @@ export class SqliteStore implements TimerStore {
     try {
       const row = this.database.prepare("SELECT value_json FROM settings WHERE key = ?").get("settings") as { value_json: string } | undefined;
       if (!row) return defaultSettings;
-      return settingsSchema.parse(JSON.parse(row.value_json) as unknown);
+      return storedSettingsSchema.parse(JSON.parse(row.value_json) as unknown);
     } catch (error) {
       this.failInitialization(error);
     }

@@ -13,7 +13,7 @@
 :root {
   font-family: MonaSans, "Avenir Next", sans-serif;
   color: #242321;
-  background: #f4f1eb;
+  background: transparent;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --surface: #f4f1eb;
@@ -66,7 +66,7 @@ body,
 
 body {
   overflow: hidden;
-  background: var(--surface);
+  background: transparent;
 }
 
 #root {
@@ -133,6 +133,39 @@ select:focus-visible {
 /* 菜单打开时，主体仍需接收点击事件，以便点击空白处收起菜单。 */
 .timerSurface:not(:has(.timerMenu)) {
   -webkit-app-region: drag;
+}
+
+.timerSurface {
+  transition: background-color 0.25s ease;
+}
+
+.timerSurface .brand,
+.timerSurface .dialTotal,
+.timerSurface .timerFooter {
+  transition: opacity 0.25s ease;
+}
+
+.timerSurface[data-faded="true"] {
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+}
+
+/* Windows 保留可缩放的原生不透明窗口，用表面色减弱背景。 */
+:root[data-platform="windows"] .timerSurface[data-faded="true"] {
+  background: color-mix(in srgb, var(--surface) 78%, var(--surface-raised));
+}
+
+.timerSurface[data-faded="true"] .brand,
+.timerSurface[data-faded="true"] .dialTotal,
+.timerSurface[data-faded="true"] .timerFooter {
+  opacity: 0.4;
+}
+
+/* 倒计时、状态、故障和可操作控件保留各自底色，不继承整窗透明度。 */
+.timerSurface[data-faded="true"] .statePill,
+.timerSurface[data-faded="true"] .monitorStatus[data-available="false"],
+.timerSurface[data-faded="true"] .timerControls .iconButton,
+.timerSurface[data-faded="true"] .titleActions .iconButton {
+  background-color: var(--surface);
 }
 
 .timerSurface button,
@@ -1215,7 +1248,11 @@ input[aria-invalid="true"] {
     animation: none;
   }
 
-  .dialProgress {
+  .dialProgress,
+  .timerSurface,
+  .timerSurface .brand,
+  .timerSurface .dialTotal,
+  .timerSurface .timerFooter {
     transition: none;
   }
 }

@@ -23,7 +23,7 @@ export interface TimerStore {
 
 export interface TimerClock { now(): number; wallDate(): Date; }
 
-export const defaultSettings: Settings = { version: 1, focusDurationSeconds: 1800, shortBreakDurationSeconds: 300, longBreakDurationSeconds: 600, focusRoundsPerCycle: 3, inputIdleThresholdSeconds: 40, focusPresenceSource: "input", defaultBreakMode: "active", theme: "system", alwaysOnTop: false, notificationsEnabled: true };
+export const defaultSettings: Settings = { version: 1, focusDurationSeconds: 1800, shortBreakDurationSeconds: 300, longBreakDurationSeconds: 600, focusRoundsPerCycle: 3, inputIdleThresholdSeconds: 40, focusPresenceSource: "input", defaultBreakMode: "active", theme: "system", alwaysOnTop: true, followWorkspaces: true, autoFade: true, notificationsEnabled: true };
 
 function durationFor(kind: Round["kind"], settings: Settings): number {
   return (kind === "focus"

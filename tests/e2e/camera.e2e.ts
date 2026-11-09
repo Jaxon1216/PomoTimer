@@ -213,6 +213,41 @@ test("invalidates camera reports across a renderer reload", async ({ cameraWindo
   expect((await report(cameraWindow, "present", restored.generation)).status).toBe("running");
 });
 
+test("keeps camera readiness across same-document navigation and renews it only on a real reload", async ({ cameraWindow }) => {
+  await probeCamera(cameraWindow, "pending");
+  await cameraWindow.getByRole("button", { name: "感知模式：触控，切换为监控" }).click();
+  const original = await cameraState(cameraWindow);
+  expect(original.enabled).toBe(true);
+  expect((await report(cameraWindow, "present", original.generation)).status).toBe("running");
+
+  const expectSameSession = async (hash: string) => {
+    await expect.poll(() => cameraWindow.evaluate(() => location.hash)).toBe(hash);
+    expect(await cameraState(cameraWindow)).toEqual(original);
+    await expect.poll(() => cameraWindow.evaluate(() => (Reflect.get(window, "cameraTestProbe") as CameraProbe).requests)).toBe(1);
+    expect((await report(cameraWindow, "present", original.generation)).status).toBe("running");
+  };
+  await expectSameSession("#timer");
+  await cameraWindow.getByRole("button", { name: "更多操作" }).click();
+  await cameraWindow.getByRole("menuitem", { name: "打开设置" }).click();
+  await expect(cameraWindow.getByRole("heading", { name: "设置" })).toBeVisible();
+  await expectSameSession("#settings");
+  await cameraWindow.getByRole("button", { name: "返回计时器" }).click();
+  await expect(cameraWindow.getByRole("heading", { name: "专注" })).toBeVisible();
+  await expectSameSession("#timer");
+  await cameraWindow.getByRole("button", { name: "打开统计" }).click();
+  await expect(cameraWindow.getByRole("heading", { name: "统计" })).toBeVisible();
+  await expectSameSession("#stats");
+
+  await cameraWindow.reload();
+  await expect(cameraWindow.getByRole("heading", { name: "统计" })).toBeVisible();
+  await expect.poll(async () => (await cameraState(cameraWindow)).enabled).toBe(true);
+  const restored = await cameraState(cameraWindow);
+  expect(restored.generation).toBeGreaterThan(original.generation);
+  expect(await rejectedReport(cameraWindow, original.generation)).toContain("会话已失效");
+  expect((await report(cameraWindow, "present", restored.generation)).status).toBe("running");
+  await expect.poll(() => cameraWindow.evaluate(() => (Reflect.get(window, "cameraTestProbe") as CameraProbe).requests)).toBe(1);
+});
+
 test("starts camera focus and active rest automatically while desk rest keeps the input threshold", async ({ application, cameraWindow }) => {
   await probeCamera(cameraWindow, "pending");
   const switchMode = cameraWindow.getByRole("button", { name: "感知模式：触控，切换为监控" });
