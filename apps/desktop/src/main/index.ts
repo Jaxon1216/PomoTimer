@@ -9,8 +9,11 @@ import { SqliteStore, StoreRecoveryError, rebuildSqliteStore } from "./store.js"
 import { TimerEngine } from "./timer.js";
 import { WindowLayout, initialContentSize, windowsCaptionHeight } from "./window-layout.js";
 import { collectStatistics, localDateKey } from "./statistics.js";
+import { readDesktopView, isRendererDocument, type DesktopView } from "../shared/window-view.js";
 
 let mainWindow: BrowserWindow | undefined;
+const followingWindows = new WeakSet<BrowserWindow>();
+let replacementQueued = false;
 let tray: Tray | undefined;
 let trayIconImage: NativeImage | undefined;
 let store: SqliteStore | undefined;
@@ -51,10 +54,14 @@ export function inspectDesktopRuntime() {
     userData: app.getPath("userData"),
     packaged: app.isPackaged,
     devServerUrl: process.env["ELECTRON_RENDERER_URL"] ?? null,
+    dockVisible: process.platform === "darwin" ? app.dock.isVisible() : null,
     window: mainWindow && !mainWindow.isDestroyed() ? {
       bounds: mainWindow.getBounds(),
       contentBounds: mainWindow.getContentBounds(),
       webContentsId: mainWindow.webContents.id,
+      configuredType: followingWindows.has(mainWindow) ? "panel" : "normal",
+      alwaysOnTop: mainWindow.isAlwaysOnTop(),
+      followsWorkspaces: mainWindow.isVisibleOnAllWorkspaces(),
     } : null,
     tray: tray && !tray.isDestroyed() && trayIconImage ? {
       bounds: tray.getBounds(),
@@ -186,7 +193,7 @@ function windowsCaption() {
   return { height: windowsCaptionHeight, color: dark ? "#252b39" : "#f4f1eb", symbolColor: dark ? "#f6f2eb" : "#242321" };
 }
 
-function createWindow(): BrowserWindow {
+function createWindow(view: DesktopView = "timer", previous?: BrowserWindow): BrowserWindow {
   // 领域：Electron / 主进程
   // 顺序：应用启动链第 3 站，Main -> BrowserWindow -> Renderer 标题栏布局。
   // 作用：macOS 使用内嵌交通灯，Windows 在独立标题栏区域保留系统窗口按钮。
@@ -194,28 +201,49 @@ function createWindow(): BrowserWindow {
   // 边界：不向 Renderer 暴露 Node、路径或通用 IPC，只由浏览器平台标记控制受控 CSS。
   const macOS = process.platform === "darwin";
   const windows = process.platform === "win32";
+  const followsWorkspaces = macOS && (engine?.settings.followWorkspaces ?? true);
   const window = new BrowserWindow({
     ...initialContentSize,
     useContentSize: true,
     autoHideMenuBar: true,
     show: false,
+    ...(followsWorkspaces ? { type: "panel" } : {}),
     titleBarStyle: macOS ? "hiddenInset" : windows ? "hidden" : "default",
     ...(windows ? { titleBarOverlay: windowsCaption() } : {}),
     ...(macOS ? { trafficLightPosition: { x: 14, y: 14 } } : {}),
-    backgroundColor: "#f6f3ee",
+    transparent: macOS,
+    backgroundColor: macOS ? "#00000000" : windowsCaption().color,
     webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, backgroundThrottling: false },
   });
+  let loaded = false;
+  let ready = false;
+  let restoredPrevious = false;
+  if (followsWorkspaces) followingWindows.add(window);
   if (windows) {
     window.removeMenu();
-    const refreshCaption = () => window.setTitleBarOverlay(windowsCaption());
+    const refreshCaption = () => { window.setTitleBarOverlay(windowsCaption()); window.setBackgroundColor(windowsCaption().color); };
     nativeTheme.on("updated", refreshCaption);
     window.once("closed", () => nativeTheme.off("updated", refreshCaption));
   }
   windowLayout.initialize(window);
   window.on("will-resize", (event, bounds, details) => windowLayout.willResize(window, bounds, details.edge, event));
   window.on("resize", () => windowLayout.didResize(window));
-  window.setAlwaysOnTop(engine?.settings.alwaysOnTop ?? false);
-  window.once("ready-to-show", () => window.show());
+  // 领域：Electron / macOS 桌面挂件
+  // 顺序：窗口创建或设置更新 -> panel 集合行为与普通悬浮层 -> 原生窗口。
+  // 作用：panel 跟随桌面和全屏，置顶单独使用 floating 层级。
+  // 原因：Electron 33 的普通全屏跟随会隐藏 Dock；panel 无需转换应用类型。
+  // 边界：不调用会改变 Dock 的跨桌面 API，不使用屏保级层级。
+  window.setAlwaysOnTop(engine?.settings.alwaysOnTop ?? true, "floating");
+  const present = () => {
+    if (!loaded || !ready || window !== mainWindow || window.isDestroyed()) return;
+    window.show();
+    if (previous && !previous.isDestroyed()) {
+      previous.destroy();
+      app.focus({ steal: false });
+      window.focus();
+    }
+  };
+  window.once("ready-to-show", () => { ready = true; present(); });
   window.on("close", (event) => { windowLayout.remember(window); if (!quitting && process.platform !== "darwin") { event.preventDefault(); window.hide(); } });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   // 领域：Electron / 媒体权限
@@ -224,25 +252,69 @@ function createWindow(): BrowserWindow {
   // 原因：默认 Electron 授权策略不能代替应用的模式和来源校验。
   // 边界：拒绝音频、外部 frame 和其他权限，不扩大 preload 能力。
   window.webContents.session.setPermissionCheckHandler((contents, permission, _origin, details) =>
-    allowsCameraPermission({ enabled: camera.state.enabled, permission, expectedContentsId: window.webContents.id,
+    allowsCameraPermission({ enabled: camera.state.enabled, permission, expectedContentsId: mainWindow?.webContents.id ?? -1,
       contentsId: contents?.id, isMainFrame: details.isMainFrame, requestingUrl: details.requestingUrl,
       rendererUrl: rendererUrl(), mediaTypes: details.mediaType ? [details.mediaType] : undefined }));
   window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
-    callback(allowsCameraPermission({ enabled: camera.state.enabled, permission, expectedContentsId: window.webContents.id,
+    callback(allowsCameraPermission({ enabled: camera.state.enabled, permission, expectedContentsId: mainWindow?.webContents.id ?? -1,
       contentsId: contents.id, isMainFrame: details.isMainFrame, requestingUrl: details.requestingUrl,
       rendererUrl: rendererUrl(), mediaTypes: "mediaTypes" in details ? details.mediaTypes : undefined }));
   });
-  window.webContents.on("did-start-loading", () => backgroundOperation(() => { rendererReady = false; syncCamera(); }));
-  window.webContents.on("did-finish-load", () => backgroundOperation(() => { rendererReady = true; syncCamera(); }));
-  window.webContents.on("render-process-gone", () => { if (!quitting) backgroundOperation(() => { rendererReady = false; fallbackCamera("摄像头检测窗口已中断"); }); });
-  window.once("closed", () => { if (!quitting) backgroundOperation(() => { rendererReady = false; fallbackCamera("摄像头检测窗口已关闭"); }); });
-  window.webContents.on("will-navigate", (event, url) => {
-    if (url !== rendererUrl()) event.preventDefault();
+  // 同文档 fragment 导航也触发 did-start-loading，但不会再次 did-finish-load。
+  window.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (window === mainWindow && isMainFrame && !isInPlace) backgroundOperation(() => { rendererReady = false; syncCamera(); });
   });
-  void window.loadURL(rendererUrl());
+  window.webContents.on("did-finish-load", () => { if (window === mainWindow) backgroundOperation(() => { rendererReady = true; syncCamera(); }); });
+  window.webContents.on("render-process-gone", () => { if (!quitting && window === mainWindow) backgroundOperation(() => { rendererReady = false; fallbackCamera("摄像头检测窗口已中断"); }); });
+  window.once("closed", () => {
+    if (!restoredPrevious && previous && !previous.isDestroyed()) previous.destroy();
+    if (!quitting && window === mainWindow) backgroundOperation(() => { rendererReady = false; fallbackCamera("摄像头检测窗口已关闭"); });
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (!isRendererDocument(url, rendererUrl())) event.preventDefault();
+  });
+  const initialUrl = new URL(rendererUrl());
+  if (view !== "timer") initialUrl.hash = view;
+  void window.loadURL(initialUrl.href).then(() => { loaded = true; present(); }).catch((reason: unknown) => {
+    if (quitting || window.isDestroyed() || window !== mainWindow) return;
+    if (previous && !previous.isDestroyed()) {
+      // 失败的新窗口不能让仍可见的旧窗口失去 IPC 与摄像头权限。
+      restoredPrevious = true;
+      mainWindow = previous;
+      window.destroy();
+      rendererReady = !previous.webContents.isLoadingMainFrame();
+      backgroundOperation(() => syncCamera());
+      previous.show();
+      previous.focus();
+      broadcast({ type: "core.error", code: "WINDOW_REPLACEMENT_FAILED", message: "窗口切换未完成，已保留原窗口。请重试保存设置或重新打开窗口。", recoverable: true });
+    } else {
+      console.error("窗口内容加载失败", reason instanceof Error ? reason.message : "未知错误");
+      dialog.showErrorBox("界面加载失败", "无法载入应用界面，请重新打开应用。计时和本地数据已保留。");
+      app.quit();
+    }
+  });
   return window;
 }
-function showWindow(): void { if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow(); else { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } }
+// 领域：Electron / 窗口重建
+// 顺序：设置保存回复 -> 下一事件循环 -> 旧窗口位置与页面 -> 新窗口就绪。
+// 作用：切换 panel 与普通窗口，保持 Main 的计时核心和数据库实例。
+// 原因：Electron 33 的 panel 强制参与所有 Spaces，关闭跟随必须更换窗口类型。
+// 边界：仅改变原生窗口，不重置计时，不把旧窗口关闭误认为摄像头故障。
+function queueWindowReplacement(): void {
+  if (process.platform !== "darwin" || replacementQueued) return;
+  replacementQueued = true;
+  setImmediate(() => {
+    replacementQueued = false;
+    const previous = mainWindow;
+    if (quitting || !previous || previous.isDestroyed()
+      || followingWindows.has(previous) === currentEngine().settings.followWorkspaces) return;
+    windowLayout.remember(previous);
+    const view = readDesktopView(new URL(previous.webContents.getURL()).hash);
+    backgroundOperation(() => { rendererReady = false; syncCamera(); });
+    mainWindow = createWindow(view, previous);
+  });
+}
+function showWindow(): void { if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow(); else { if (mainWindow.isMinimized()) mainWindow.restore(); app.focus({ steal: false }); mainWindow.show(); mainWindow.focus(); } }
 function installIpc(): void {
   ipcMain.handle("pomodoro:get-snapshot", (event) => { assertSender(event); if (runtimeFailure) throw runtimeFailure; return coreOperation(() => { const snapshot = currentEngine().snapshot; publishSnapshot(snapshot); return timerSnapshotSchema.parse(snapshot); }); });
   ipcMain.handle("pomodoro:get-settings", (event) => { assertSender(event); return settingsSchema.parse(currentEngine().settings); });
@@ -274,7 +346,8 @@ function installIpc(): void {
       syncCamera();
       broadcast({ type: "settings.changed", settings });
       mainWindow?.setAlwaysOnTop(settings.alwaysOnTop);
-      if (process.platform === "win32" && patch.theme) mainWindow?.setTitleBarOverlay(windowsCaption());
+      queueWindowReplacement();
+      if (process.platform === "win32" && patch.theme) { mainWindow?.setTitleBarOverlay(windowsCaption()); mainWindow?.setBackgroundColor(windowsCaption().color); }
       publishSnapshot();
       return settings;
     });

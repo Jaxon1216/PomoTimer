@@ -38,6 +38,8 @@ const settings = {
   defaultBreakMode: "active",
   theme: "system",
   alwaysOnTop: false,
+  followWorkspaces: true,
+  autoFade: true,
   notificationsEnabled: true,
 };
 
@@ -165,6 +167,36 @@ try {
       await page.getByRole("button", { name, exact: true }).click({ trial: true });
     }
     await page.screenshot({ path: join(output, `timer-${width}x${height}.png`) });
+  }
+
+  for (const theme of ["light", "dark"]) {
+    await page.setViewportSize({ width: 160, height: 180 });
+    await page.goto(renderer);
+    await page.getByText("30:00", { exact: true }).waitFor();
+    await settle(page);
+    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
+    await page.mouse.move(100, 80);
+    await page.mouse.move(-5, -5);
+    await page.locator('.timerSurface[data-faded="true"]').waitFor();
+    const appearance = await page.locator(".timerSurface").evaluate((surface) => {
+      const opacity = (selector) => getComputedStyle(surface.querySelector(selector)).opacity;
+      return {
+        surfaceOpacity: getComputedStyle(surface).opacity,
+        background: getComputedStyle(surface).backgroundColor,
+        time: opacity("time"),
+        state: opacity(".statePill"),
+        primary: opacity(".timerControls .primary"),
+        total: opacity(".dialTotal"),
+      };
+    });
+    assert.equal(appearance.surfaceOpacity, "1", `${theme}: the window's contents must not fade as a group`);
+    assert.match(appearance.background, /(?:,\s*0\.78|\/\s*0\.78)\)$/, `${theme}: only the timer background becomes translucent`);
+    for (const key of ["time", "state", "primary"]) assert.equal(appearance[key], "1", `${theme}: ${key} remains clear`);
+    assert.equal(appearance.total, "0.4", `${theme}: auxiliary information is subdued`);
+    assert.equal((await geometry(page)).fits, true, `${theme}: faded minimum timer still fits the dial`);
+    await page.screenshot({ path: join(output, `timer-faded-${theme}-160x180.png`) });
+    await page.mouse.move(100, 80);
+    await page.locator('.timerSurface[data-faded="false"]').waitFor();
   }
 
   await page.goto(`${renderer}?duration=7200000`);

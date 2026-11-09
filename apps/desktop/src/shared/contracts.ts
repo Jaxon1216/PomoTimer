@@ -73,6 +73,8 @@ export const settingsSchema = z.object({
   defaultBreakMode: breakModeSchema,
   theme: z.enum(["light", "dark", "system"]),
   alwaysOnTop: z.boolean(),
+  followWorkspaces: z.boolean(),
+  autoFade: z.boolean(),
   notificationsEnabled: z.boolean(),
 }).strict();
 export type Settings = z.infer<typeof settingsSchema>;

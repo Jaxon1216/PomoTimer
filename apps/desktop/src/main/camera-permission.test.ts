@@ -19,6 +19,11 @@ describe("camera permission boundary", () => {
     expect(allowsCameraPermission(videoRequest)).toBe(true);
   });
 
+  it.each(["timer", "settings", "stats"])("allows the same trusted document on the restored %s page", (view) => {
+    expect(allowsCameraPermission({ ...videoRequest, requestingUrl: `http://localhost:5174/#${view}` })).toBe(true);
+    expect(allowsCameraPermission({ ...videoRequest, requestingUrl: `http://localhost:5174/?camera=1#${view}` })).toBe(false);
+  });
+
   it("normalizes the trailing slash added by Chromium to the development URL", () => {
     expect(allowsCameraPermission({
       ...videoRequest, rendererUrl: "http://localhost:5174/", requestingUrl: "http://localhost:5174",

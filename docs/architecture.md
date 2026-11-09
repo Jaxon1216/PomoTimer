@@ -29,9 +29,9 @@ React 渲染快照、导航设置和统计视图，并维护临时表单。Prelo
 
 模型源文件位于 `apps/desktop/resources/camera/mediapipe/blaze_face_short_range.tflite`。开发/构建前脚本从精确锁定的 npm 包复制 WASM 与运行脚本，并复制 Apache 许可证；生成文件不提交 Git。构建产物包含全部检测资源，运行时不下载模型或代码。
 
-Main 持有摄像头启停状态和递增代次，通过 `camera.state` 发布。Renderer 初始读取 `getCameraState`，每次代次变化先清理旧流与检测器，再启动新检测；异步权限/模型初始化迟到也必须关闭资源。Main 为首次有效样本设置 25 秒启动期限，随后按单调时钟检查 5 秒心跳期限。过期、报告 `unknown`、窗口销毁或 Renderer 崩溃时清空摄像头状态，保存触控回退设置并广播 `settings.changed` 和可恢复错误；旧代次样本被拒绝。窗口重新加载先停用旧代次，加载完成后重新获取监控状态和新样本。
+Main 持有摄像头启停状态和递增代次，通过 `camera.state` 发布。Renderer 初始读取 `getCameraState`，每次代次变化先清理旧流与检测器，再启动新检测；异步权限/模型初始化迟到也必须关闭资源。Main 为首次有效样本设置 25 秒启动期限，随后按单调时钟检查 5 秒心跳期限。过期、报告 `unknown`、非计划的主窗口销毁或 Renderer 崩溃时清空摄像头状态，保存触控回退设置并广播 `settings.changed` 和可恢复错误；旧代次样本被拒绝。窗口重新加载先停用旧代次，加载完成后重新获取监控状态和新样本。切换桌面跟随引起的计划内窗口重建保留选中的监控模式，只停止旧代次、将摄像头在场置为 `unknown`，等待新主窗口重新检测；旧窗口的关闭不触发故障回退。
 
-Main 管理一个可缩放的 BrowserWindow，并根据内容区域约束原生窗口尺寸。Renderer 随视口宽高调整布局，通过 Electron 拖动区域移动窗口，按钮、菜单和表单保留普通指针交互。拖动和缩放由原生窗口处理。
+Main 管理一个对外的可缩放主窗口，并根据内容区域约束原生窗口尺寸。切换 macOS 窗口类型时可短暂保留旧窗口，待新窗口就绪后销毁；只有当前主窗口的可信主 frame 可调用 IPC。Renderer 随视口宽高调整布局，通过 Electron 拖动区域移动窗口，按钮、菜单和表单保留普通指针交互。拖动和缩放由原生窗口处理。
 
 ## 3. 平台集成
 
@@ -45,6 +45,9 @@ Main 管理一个可缩放的 BrowserWindow，并根据内容区域约束原生�
 - 关闭窗口在 Windows 上隐藏到托盘，退出菜单设置退出标记后真正退出；macOS 遵循应用生命周期。
 - `contextIsolation`、sandbox、CSP、禁止导航和外部链接 allowlist 必须保持。
 - macOS 使用 `hiddenInset`，为左上角交通灯预留空间。Windows 使用 Electron 的 `hidden` 和 32 px 标题栏覆盖层，保留系统窗口按钮，停止使用会被 Alt 唤出的默认应用菜单。覆盖层单独占一行，Main 在约束内容尺寸时扣除该行；Renderer 按下方计时器的可用宽高排版。计时器留白在两个平台都由系统处理拖动，按钮仍可点击。
+- macOS 的 `followWorkspaces` 开启时构造 `type: "panel"`，关闭时构造普通窗口；`alwaysOnTop` 独立使用普通 `floating` 层级。Electron 33 的 panel 固定参与所有 Spaces 和全屏辅助空间，因此切换跟随通过异步重建窗口生效，保持原有位置、尺寸、页面和同一个 TimerEngine、Store。页面仅通过校验过的 `timer`、`settings`、`stats` fragment 恢复，不增加 IPC 或允许任意导航。
+- 桌面跟随不调用会转换应用进程类型的 `setVisibleOnAllWorkspaces`，以保留正常 Dock 与 Cmd-Tab 入口。panel 的激活、跨全屏显示、撤销跟随和多屏体验仍须按路线图进行实机验收；Windows 不启用该窗口类型。
+- macOS 原生窗口提供透明背景；Windows 保留不透明原生窗口，避免 Electron 透明窗口的缩放与最大化限制，并在主题变化时同步原生底色。Renderer 在 macOS 降低背景不透明度，在 Windows 混合表面色，同时淡化辅助信息。`autoFade` 仅在计时器页根据本地指针、键盘与菜单交互状态生效，只调整背景和辅助信息，不调用整窗 `setOpacity`，不采集系统输入内容、不影响 TimerEngine。设置和统计页继续绘制不透明背景。
 - 初始内容区域为 360×478 px，最小为 160×180 px。Main 换算原生边框后，将内容高度限制在宽度的 1.5 倍以内，同时允许宽矮窗口。
 - 托盘资源与应用图标分离：macOS 从 `trayTemplate.png` 和 `trayTemplate@2x.png` 创建透明黑色 template `NativeImage` 并设置 tooltip；Windows 只加载 `.ico`，Dock 继续使用 `.icns`。
 - 原生验收使用独立临时 `userData`，由 Main 的真实 PID、`app.getPath("userData")` 和当前 Tray 的 `getBounds()` 确认实例。只有显式设置 `POMODORO_DIAGNOSTICS=1` 时，Node inspector 才可通过 Main 内部的只读 symbol 查询窗口、Tray 及其实际图像倍率；该能力不进入 preload 或 IPC。其他常驻应用无需退出。
@@ -52,6 +55,8 @@ Main 管理一个可缩放的 BrowserWindow，并根据内容区域约束原生�
 ## 4. SQLite
 
 数据库文件为 `pomodoro.sqlite`。版本 4 迁移保留原有四张表和版本 1–3 的校验和，事务内将可读取的旧快照改写成计时检查点。检查点记录轮次、剩余时间、计时状态等恢复信息，系统挂起可以保留原因，输入监测的字段留在实时快照中。专注完成时，Store 在同一事务内写入完成记录和下一轮检查点，按稳定的轮次 ID 防止重启后重复计数。
+
+窗口选项沿用版本 1 设置 JSON，不增加或修改已发布迁移。Store 的读取兼容 schema 仅为旧数据缺少的 `followWorkspaces`、`autoFade` 补 `true`，保留原有 `alwaysOnTop` 和显式 `false`；IPC 的完整设置与 patch 仍使用严格 schema，patch 不添加默认字段。
 
 `better-sqlite3` 12.x 是当前 Electron 33 / Node 20 构建目标的实现选择。打包前由 electron-builder 重建原生模块；升级 Electron 或数据库驱动时必须重新验证构建。
 
@@ -64,3 +69,5 @@ Main 管理一个可缩放的 BrowserWindow，并根据内容区域约束原生�
 `TimerEngine` 用注入的单调时钟、墙钟和 Store 独立测试。Renderer 测试验证空格计时控制、右上角模式入口、导航、休息准备倒数、按计划时长分配的周期条和故障提示。布局检查覆盖最小窗口、窄窗的高度上限和宽矮窗口。Electron E2E 验证真实 preload/IPC、原生窗口尺寸、导航和计时事件同步。macOS/Windows 的 idle、通知、托盘和睡眠恢复仍需真实设备手工验证。
 
 `npm run test:store` 使用与 Electron 相同 ABI 的运行时验证真实 SQLite 的旧库兼容、校验和、事务回滚、去重及包含 WAL 的恢复副本。普通 PR CI 与发布 CI 均运行原生数据库测试和 Electron E2E；模拟电源事件只验证事件接线，不能替代真实锁屏和睡眠验收。
+
+桌面挂件回归还覆盖旧设置补值、三个开关独立性、鼠标离开两秒后的局部淡化、键盘与菜单恢复，以及 macOS 跟随开关引起的窗口重建。自动化窗口标志不能证明实际跨原生全屏显示，也不能替代 Dock、Cmd-Tab、外接屏和 Windows 原生窗口的真机检查；本轮结果见[桌面挂件验证](desktop-widget-validation.md)。

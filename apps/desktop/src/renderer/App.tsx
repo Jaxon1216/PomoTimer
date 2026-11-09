@@ -27,8 +27,10 @@ import type {
 } from "../shared/contracts";
 import { formatDuration } from "./time";
 import { startCameraPresence } from "./camera-presence";
+import { useTimerFade } from "./use-timer-fade";
+import { readDesktopView, type DesktopView } from "../shared/window-view";
 
-type View = "timer" | "settings" | "stats";
+type View = DesktopView;
 
 const labels = {
   focus: "专注",
@@ -148,6 +150,7 @@ function TimerView({
 }): ReactElement {
   const action = primaryCommand(snapshot);
   const [menuOpen, setMenuOpen] = useState(false);
+  const { surface, faded } = useTimerFade(settings.autoFade, menuOpen || modeChanging);
   const menuContainer = useRef<HTMLDivElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const progress = 1 - snapshot.remainingMs / snapshot.round.totalDurationMs;
@@ -224,7 +227,7 @@ function TimerView({
   };
 
   return (
-    <main className={`timerSurface round-${snapshot.round.kind}`}>
+    <main ref={surface} className={`timerSurface round-${snapshot.round.kind}`} data-faded={faded}>
       <header className="titlebar">
         <span className="brand">
           POMO<span>DOT</span>
@@ -394,6 +397,8 @@ function SettingsView({
         defaultBreakMode: draft.defaultBreakMode,
         theme: draft.theme,
         alwaysOnTop: draft.alwaysOnTop,
+        followWorkspaces: draft.followWorkspaces,
+        autoFade: draft.autoFade,
         notificationsEnabled: draft.notificationsEnabled,
       });
       setSaved(true);
@@ -505,6 +510,20 @@ function SettingsView({
               <span>常驻顶部</span>
               <input type="checkbox" checked={draft.alwaysOnTop} onChange={(event) => set("alwaysOnTop", event.target.checked)} />
             </label>
+            <label className="toggleRow">
+              <span>跟随桌面与全屏</span>
+              <input type="checkbox" checked={draft.followWorkspaces}
+                disabled={document.documentElement.dataset.platform !== "macos"}
+                aria-describedby="follow-workspaces-hint"
+                onChange={(event) => set("followWorkspaces", event.target.checked)} />
+            </label>
+            <p className="infoNote" id="follow-workspaces-hint">仅 macOS。切换桌面或进入全屏应用时仍显示计时器；置顶单独控制。</p>
+            <label className="toggleRow">
+              <span>自动淡化</span>
+              <input type="checkbox" checked={draft.autoFade} aria-describedby="auto-fade-hint"
+                onChange={(event) => set("autoFade", event.target.checked)} />
+            </label>
+            <p className="infoNote" id="auto-fade-hint">鼠标离开计时器两秒后淡化背景和辅助信息，移入恢复。数字、状态与操作保持清晰。</p>
             <label className="toggleRow">
               <span>完成与暂停通知</span>
               <input type="checkbox" checked={draft.notificationsEnabled} onChange={(event) => set("notificationsEnabled", event.target.checked)} />
@@ -704,13 +723,17 @@ export function App(): ReactElement {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [statistics, setStatistics] = useState<StatisticsSnapshot | null>(null);
   const [statisticsError, setStatisticsError] = useState<string | null>(null);
-  const [view, setView] = useState<View>("timer");
+  const [view, setView] = useState<View>(() => readDesktopView(window.location.hash));
   const [fatalError, setFatalError] = useState<{ title: string; message: string; storage: boolean } | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [cameraState, setCameraState] = useState<CameraState>({ enabled: false, generation: 0 });
   const [modeChanging, setModeChanging] = useState(false);
   const modeChangePending = useRef(false);
   const statisticsRequest = useRef(0);
+
+  useEffect(() => {
+    window.history.replaceState(null, "", `#${view}`);
+  }, [view]);
 
   const syncStats = useCallback(async () => {
     const request = ++statisticsRequest.current;

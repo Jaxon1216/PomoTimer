@@ -54,6 +54,8 @@ const settings: Settings = {
   defaultBreakMode: "active",
   theme: "system",
   alwaysOnTop: false,
+  followWorkspaces: true,
+  autoFade: true,
   notificationsEnabled: true,
 };
 
@@ -123,7 +125,9 @@ describe("App", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
+    delete document.documentElement.dataset.platform;
   });
 
   it.each([
@@ -138,6 +142,7 @@ describe("App", () => {
 
   beforeEach(() => {
     eventListener = undefined;
+    window.history.replaceState(null, "", "#timer");
     vi.stubGlobal("innerWidth", 1024);
     vi.stubGlobal("innerHeight", 768);
     window.pomodoro = {
@@ -177,6 +182,126 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "跳到下一轮" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
     expect(screen.getByRole("menuitem", { name: "重新开始当前轮次" })).toBeEnabled();
+  });
+
+  it("fades only after leaving for two seconds and restores immediately on entry", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    vi.useFakeTimers();
+    const timer = screen.getByRole("main");
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(timer).toHaveAttribute("data-faded", "false");
+    fireEvent.mouseLeave(timer);
+    act(() => vi.advanceTimersByTime(1_999));
+    expect(timer).toHaveAttribute("data-faded", "false");
+    fireEvent.mouseEnter(timer);
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(timer).toHaveAttribute("data-faded", "false");
+    fireEvent.mouseLeave(timer);
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(timer).toHaveAttribute("data-faded", "true");
+    expect(screen.getByText("30:00")).toBeVisible();
+    expect(screen.getByText("准备开始")).toBeVisible();
+    expect(screen.getByRole("button", { name: "开始计时" })).toBeEnabled();
+    expect(window.pomodoro.command).not.toHaveBeenCalled();
+    fireEvent.mouseEnter(timer);
+    expect(timer).toHaveAttribute("data-faded", "false");
+  });
+
+  it("keeps an open menu and keyboard-focused controls clear", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    vi.useFakeTimers();
+    const timer = screen.getByRole("main");
+    fireEvent.mouseLeave(timer);
+    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(timer).toHaveAttribute("data-faded", "false");
+    fireEvent.keyDown(document.body, { code: "Escape", key: "Escape" });
+    const more = screen.getByRole("button", { name: "更多操作" });
+    expect(more).toHaveFocus();
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(timer).toHaveAttribute("data-faded", "false");
+    await act(async () => more.blur());
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(timer).toHaveAttribute("data-faded", "true");
+  });
+
+  it("does not fade during a drag and restarts the delay after release or resize", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    vi.useFakeTimers();
+    const timer = screen.getByRole("main");
+    fireEvent.pointerDown(timer);
+    fireEvent.mouseLeave(timer, { buttons: 1 });
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(timer).toHaveAttribute("data-faded", "false");
+    fireEvent.pointerUp(window);
+    act(() => vi.advanceTimersByTime(1_500));
+    fireEvent.resize(window);
+    act(() => vi.advanceTimersByTime(1_999));
+    expect(timer).toHaveAttribute("data-faded", "false");
+    act(() => vi.advanceTimersByTime(1));
+    expect(timer).toHaveAttribute("data-faded", "true");
+  });
+
+  it("recovers when native dragging consumes the pointer-up event", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "专注" });
+    vi.useFakeTimers();
+    const timer = screen.getByRole("main");
+    fireEvent.mouseLeave(timer, { buttons: 1 });
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(timer).toHaveAttribute("data-faded", "false");
+    fireEvent.mouseEnter(timer, { buttons: 0 });
+    fireEvent.mouseLeave(timer, { buttons: 0 });
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(timer).toHaveAttribute("data-faded", "true");
+  });
+
+  it("leaves settings and statistics opaque, including a replacement window's initial page", async () => {
+    window.history.replaceState(null, "", "#settings");
+    render(<App />);
+    await screen.findByRole("heading", { name: "设置" });
+    expect(screen.getByRole("main")).not.toHaveAttribute("data-faded");
+    expect(window.location.hash).toBe("#settings");
+    fireEvent.click(screen.getByRole("button", { name: "返回计时器" }));
+    await screen.findByRole("heading", { name: "专注" });
+    expect(window.location.hash).toBe("#timer");
+    fireEvent.click(screen.getByRole("button", { name: "打开统计" }));
+    await screen.findByRole("heading", { name: "统计" });
+    expect(screen.getByRole("main")).not.toHaveAttribute("data-faded");
+    expect(window.location.hash).toBe("#stats");
+  });
+
+  it("saves independent desktop preferences and applies the fade switch immediately", async () => {
+    document.documentElement.dataset.platform = "macos";
+    window.pomodoro.updateSettings = vi.fn(async (patch) => ({ ...settings, ...patch }));
+    render(<App />);
+    await openSettings();
+    fireEvent.click(screen.getByRole("checkbox", { name: "常驻顶部" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "跟随桌面与全屏" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "自动淡化" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await screen.findByText("已保存");
+    expect(window.pomodoro.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ alwaysOnTop: true, followWorkspaces: false, autoFade: false }));
+    fireEvent.click(screen.getByRole("button", { name: "返回计时器" }));
+    vi.useFakeTimers();
+    const timer = screen.getByRole("main");
+    fireEvent.mouseLeave(timer);
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(timer).toHaveAttribute("data-faded", "false");
+  });
+
+  it("marks desktop following unavailable outside macOS without changing its saved value", async () => {
+    document.documentElement.dataset.platform = "windows";
+    render(<App />);
+    await openSettings();
+    const follow = screen.getByRole("checkbox", { name: "跟随桌面与全屏" });
+    expect(follow).toBeDisabled();
+    expect(follow).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "常驻顶部" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "自动淡化" })).toBeEnabled();
   });
 
   it("keeps camera off by default and switches modes only after an explicit choice", async () => {
