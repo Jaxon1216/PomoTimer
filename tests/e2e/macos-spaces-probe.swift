@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import CoreGraphics
 import Foundation
 
@@ -34,7 +35,6 @@ final class FullscreenProbe: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowDidEnterFullScreen(_ notification: Notification) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             self.report(error: nil)
-            self.window.toggleFullScreen(nil)
         }
     }
 
@@ -69,9 +69,73 @@ final class FullscreenProbe: NSObject, NSApplicationDelegate, NSWindowDelegate {
             "probeIsActive": NSApplication.shared.isActive,
             "windows": windows
         ]
-        if let error = error { result["error"] = error }
+        if let error = error {
+            result["error"] = error
+            printResult(result)
+            return
+        }
+        checkCmdTab { outcome in
+            result["cmdTab"] = outcome
+            self.printResult(result)
+            self.window.toggleFullScreen(nil)
+        }
+    }
+
+    private func printResult(_ result: [String: Any]) {
         if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]),
            let text = String(data: data, encoding: .utf8) { print(text) }
+    }
+
+    // 领域：macOS / 应用切换验收
+    // 顺序：记录全屏证据 -> 激活两个自建进程 -> 原生 Cmd-Tab -> 验证 Electron 激活。
+    // 作用：验证真实应用切换入口，不以 Dock 可见标志代替键盘切换结果。
+    // 原因：panel 的窗口激活方式不同，需要实际确认产品仍能通过 Cmd-Tab 进入。
+    // 边界：不申请权限；仅在两个自建进程均确认激活后发送一次完整快捷键。
+    private func checkCmdTab(_ completion: @escaping ([String: Any]) -> Void) {
+        guard CGPreflightPostEventAccess() else {
+            completion(["available": false, "skipped": true, "reason": "Event-posting access is not already granted"])
+            return
+        }
+        guard let electron = NSRunningApplication(processIdentifier: electronPID) else {
+            completion(["available": true, "skipped": true, "reason": "The isolated Electron process is unavailable"])
+            return
+        }
+        guard electron.bundleIdentifier == "com.easton.pomodotimer" else {
+            completion(["available": true, "skipped": true,
+                        "reason": "Cmd-Tab requires the packaged product bundle ID to avoid grouping development Electron apps"])
+            return
+        }
+        electron.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            guard electron.isActive else {
+                completion(["available": true, "skipped": true, "reason": "Could not confirm activation of the isolated Electron app"])
+                return
+            }
+            NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                guard NSRunningApplication.current.isActive else {
+                    completion(["available": true, "skipped": true, "electronActivated": true,
+                                "reason": "Could not confirm activation of the isolated probe app"])
+                    return
+                }
+                let command = CGKeyCode(kVK_Command)
+                let tab = CGKeyCode(kVK_Tab)
+                for (key, down, flags) in [(command, true, CGEventFlags.maskCommand),
+                                          (tab, true, CGEventFlags.maskCommand),
+                                          (tab, false, CGEventFlags.maskCommand),
+                                          (command, false, CGEventFlags())] {
+                    let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down)
+                    event?.flags = flags
+                    event?.post(tap: .cghidEventTap)
+                    usleep(80_000)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    completion(["available": true, "skipped": false, "electronActivated": true,
+                                "probeActivated": true, "sent": true, "electronActiveAfter": electron.isActive,
+                                "bundleID": electron.bundleIdentifier ?? ""])
+                }
+            }
+        }
     }
 }
 

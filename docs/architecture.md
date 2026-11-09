@@ -46,6 +46,7 @@ Main 管理一个对外的可缩放主窗口，并根据内容区域约束原生
 - `contextIsolation`、sandbox、CSP、禁止导航和外部链接 allowlist 必须保持。
 - macOS 使用 `hiddenInset`，为左上角交通灯预留空间。Windows 使用 Electron 的 `hidden` 和 32 px 标题栏覆盖层，保留系统窗口按钮，停止使用会被 Alt 唤出的默认应用菜单。覆盖层单独占一行，Main 在约束内容尺寸时扣除该行；Renderer 按下方计时器的可用宽高排版。计时器留白在两个平台都由系统处理拖动，按钮仍可点击。
 - macOS 的 `followWorkspaces` 开启时构造 `type: "panel"`，关闭时构造普通窗口；`alwaysOnTop` 独立使用普通 `floating` 层级。Electron 33 的 panel 固定参与所有 Spaces 和全屏辅助空间，因此切换跟随通过异步重建窗口生效，保持原有位置、尺寸、页面和同一个 TimerEngine、Store。页面仅通过校验过的 `timer`、`settings`、`stats` fragment 恢复，不增加 IPC 或允许任意导航。
+- 新窗口成功加载并就绪后才销毁旧窗口；加载失败恢复旧窗口的 IPC 与动态媒体权限校验，用户可重新保存以重试。摄像头就绪门禁只在主 frame 的非同文档导航时失效；fragment 导航不释放检测会话，真实 reload 仍签发新代次。
 - 桌面跟随不调用会转换应用进程类型的 `setVisibleOnAllWorkspaces`，以保留正常 Dock 与 Cmd-Tab 入口。panel 的激活、跨全屏显示、撤销跟随和多屏体验仍须按路线图进行实机验收；Windows 不启用该窗口类型。
 - macOS 原生窗口提供透明背景；Windows 保留不透明原生窗口，避免 Electron 透明窗口的缩放与最大化限制，并在主题变化时同步原生底色。Renderer 在 macOS 降低背景不透明度，在 Windows 混合表面色，同时淡化辅助信息。`autoFade` 仅在计时器页根据本地指针、键盘与菜单交互状态生效，只调整背景和辅助信息，不调用整窗 `setOpacity`，不采集系统输入内容、不影响 TimerEngine。设置和统计页继续绘制不透明背景。
 - 初始内容区域为 360×478 px，最小为 160×180 px。Main 换算原生边框后，将内容高度限制在宽度的 1.5 倍以内，同时允许宽矮窗口。

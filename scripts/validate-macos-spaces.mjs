@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { _electron as electron } from "@playwright/test";
@@ -10,6 +10,8 @@ import { _electron as electron } from "@playwright/test";
 if (process.platform !== "darwin") throw new Error("Native Spaces validation requires macOS.");
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktop = join(root, "apps/desktop");
+const packagedExecutable = process.env.POMODORO_SPACES_EXECUTABLE;
+if (packagedExecutable && !isAbsolute(packagedExecutable)) throw new Error("The packaged Spaces executable path must be absolute.");
 const outputDirectory = join(root, "test-results", "macos-spaces");
 await mkdir(outputDirectory, { recursive: true });
 
@@ -39,7 +41,8 @@ const dataDirectory = await mkdtemp(join(tmpdir(), "pomodot-spaces-"));
 let application;
 try {
   application = await electron.launch({
-    args: [join(desktop, "out/main/index.js"), `--user-data-dir=${dataDirectory}`],
+    executablePath: packagedExecutable,
+    args: [...(packagedExecutable ? [] : [join(desktop, "out/main/index.js")]), `--user-data-dir=${dataDirectory}`],
     cwd: desktop,
     env: { ...process.env, POMODORO_DIAGNOSTICS: "1", POMODORO_EXPECTED_USER_DATA: dataDirectory },
     timeout: 30_000,
@@ -108,13 +111,15 @@ try {
     && timerBounds.Y + timerBounds.Height <= fullscreenBounds.Y + fullscreenBounds.Height,
   "The timer must be on the same physical display as the fullscreen probe");
   assert.equal(dockVisibleAfter, true);
+  if (probe.cmdTab?.sent) assert.equal(probe.cmdTab.electronActiveAfter, true, "A real Cmd-Tab must activate the isolated Electron app");
   if (nativeResize.available) {
     assert.equal(nativeResize.grew, true, "Dragging the real native edge must grow the transparent panel");
     assert.deepEqual(nativeResize.afterMinimum, [160, 180], "Native corner resizing must respect the minimum content size");
   }
   console.log(JSON.stringify(report, null, 2));
   if (!nativeResize.available) console.log("Native edge resizing was skipped because event-posting access is not already granted; no permission was requested.");
-  console.log("Native fullscreen probe passed; Cmd-Tab, swipe gestures, Split View and external displays still require separate real-device checks.");
+  if (probe.cmdTab?.skipped) console.log(`Cmd-Tab was skipped: ${probe.cmdTab.reason}`);
+  console.log("Native fullscreen probe passed; swipe gestures, Split View and external displays still require separate real-device checks.");
 } finally {
   try { if (application) await application.close(); }
   finally { await rm(dataDirectory, { recursive: true, force: true }); }
