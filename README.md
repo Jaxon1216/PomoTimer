@@ -96,7 +96,7 @@ npm run dev
 
 安装包输出在 `apps/desktop/dist/`。打包后，可在对应系统运行 `node scripts/smoke-packaged.mjs` 检查打包应用；开发启动与原生回归说明见[开发验证文档](docs/README.md#本地原生回归)。
 
-CI 在 macOS 和 Windows 上运行 lint、类型检查、单元测试、原生数据库测试和 Electron E2E。发布工作流额外构建 Windows x64、macOS ARM64 和 macOS x64 安装包，但不替代人工验收。
+CI 在 macOS 和 Windows 上运行 lint、类型检查、单元测试、原生数据库测试和 Electron E2E。PR 更新只触发 PR 检查，`main` 更新触发主分支检查；同一 PR 或分支的新提交会取消旧运行。`main` 合并要求分支保持最新，且 GitHub Actions 的 `macos-latest`、`windows-2022` 检查均通过，管理员也受此限制；配置和维护命令见 [CI 与合并门槛](docs/ci.md)。发布工作流额外构建 Windows x64、macOS ARM64 和 macOS x64 安装包，但不替代人工验收。
 
 ## 架构与目录
 
