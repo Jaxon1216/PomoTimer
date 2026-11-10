@@ -1,6 +1,6 @@
 {
   "name": "@pomodoro/desktop",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "description": "A local-first desktop focus timer.",
   "author": "Easton",
   "private": true,
@@ -74,6 +74,10 @@
       "node_modules/better-sqlite3/**/*"
     ],
     "mac": {
+      "sign": "../../scripts/sign-mac.mjs",
+      "notarize": false,
+      "hardenedRuntime": true,
+      "forceCodeSigning": true,
       "artifactName": "Pomodot-${version}-mac-${arch}.${ext}",
       "icon": "resources/icons/pomodoro-timer.icns",
       "target": [

@@ -1,6 +1,6 @@
 {
   "name": "pomodoro-timer",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "private": true,
   "workspaces": [
     "apps/desktop"
@@ -13,9 +13,11 @@
     "test": "npm run test --workspace=@pomodoro/desktop",
     "test:store": "npm run rebuild:native --workspace=@pomodoro/desktop && node scripts/test-store-native.mjs",
     "test:e2e": "npm run test:e2e --workspace=@pomodoro/desktop",
+    "test:packaging": "node scripts/test-mac-signature.mjs",
     "package": "npm run package --workspace=@pomodoro/desktop"
   },
   "devDependencies": {
+    "@electron/osx-sign": "1.3.1",
     "esbuild": "0.21.5"
   }
 }

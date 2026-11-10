@@ -64,8 +64,15 @@ jobs:
           DEBUG: pw:api
       - name: Build installer
         run: npm exec --workspace=@pomodoro/desktop -- electron-builder ${{ matrix.builder_args }} --publish never
-      - name: Smoke-test packaged application
-        run: node scripts/smoke-packaged.mjs
+      - name: Verify macOS signatures and reject tampering
+        if: runner.os == 'macOS'
+        run: npm run test:packaging
+      - name: Install and verify final macOS DMG
+        if: runner.os == 'macOS'
+        run: node scripts/smoke-mac-dmg.mjs apps/desktop/dist/Pomodot-${GITHUB_REF_NAME#v}-mac-${{ matrix.arch }}.dmg
+      - name: Install and verify final Windows installer
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-windows-installer.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.platform }}-${{ matrix.arch }}

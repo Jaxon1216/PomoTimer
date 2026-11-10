@@ -29,6 +29,8 @@ React 渲染快照、导航设置和统计视图，并维护临时表单。Prelo
 
 模型源文件位于 `apps/desktop/resources/camera/mediapipe/blaze_face_short_range.tflite`。开发/构建前脚本从精确锁定的 npm 包复制 WASM 与运行脚本，并复制 Apache 许可证；生成文件不提交 Git。构建产物包含全部检测资源，运行时不下载模型或代码。
 
+macOS 打包在生成 DMG 前通过自定义 signer 对应用、辅助进程、框架、原生 SQLite 模块与资源做 ad hoc 完整性签名，保留 hardened runtime。主应用和辅助应用仅授予 V8 JIT、ad hoc 库加载和摄像头 entitlement，库不获得设备授权；主应用另声明摄像头用途，麦克风仍被运行时权限门禁拒绝。ad hoc 不提供 Developer ID 身份或 Apple 公证，首次打开需要用户按系统提示批准。
+
 Main 持有摄像头启停状态和递增代次，通过 `camera.state` 发布。Renderer 初始读取 `getCameraState`，每次代次变化先清理旧流与检测器，再启动新检测；异步权限/模型初始化迟到也必须关闭资源。Main 为首次有效样本设置 25 秒启动期限，随后按单调时钟检查 5 秒心跳期限。过期、报告 `unknown`、非计划的主窗口销毁或 Renderer 崩溃时清空摄像头状态，保存触控回退设置并广播 `settings.changed` 和可恢复错误；旧代次样本被拒绝。窗口重新加载先停用旧代次，加载完成后重新获取监控状态和新样本。切换桌面跟随引起的计划内窗口重建保留选中的监控模式，只停止旧代次、将摄像头在场置为 `unknown`，等待新主窗口重新检测；旧窗口的关闭不触发故障回退。
 
 Main 管理一个对外的可缩放主窗口，并根据内容区域约束原生窗口尺寸。切换 macOS 窗口类型时可短暂保留旧窗口，待新窗口就绪后销毁；只有当前主窗口的可信主 frame 可调用 IPC。Renderer 随视口宽高调整布局，通过 Electron 拖动区域移动窗口，按钮、菜单和表单保留普通指针交互。拖动和缩放由原生窗口处理。
@@ -72,5 +74,7 @@ Main 管理一个对外的可缩放主窗口，并根据内容区域约束原生
 `npm run test:store` 使用与 Electron 相同 ABI 的运行时验证真实 SQLite 的旧库兼容、校验和、事务回滚、去重及包含 WAL 的恢复副本。普通 PR CI 与发布 CI 均运行原生数据库测试和 Electron E2E；模拟电源事件只验证事件接线，不能替代真实锁屏和睡眠验收。
 
 设置主题的 Electron E2E 在两个平台检查实际绘制背景的 `.pageSurface`，覆盖浅色、深色和系统主题切换；`body` 保持透明，不能用于判断设置页背景。Windows 另外检查原生标题栏颜色。CI 触发策略和主分支合并门槛见 [CI 与合并门槛](ci.md)。
+
+PR CI 和发布流程均构建 macOS ARM64、macOS Intel 与 Windows x64 安装包。macOS 验证签名与摄像头 entitlement、篡改拒绝，并从只读挂载的最终 DMG 复制安装；Windows 静默安装最终 EXE。安装后均以独立临时 userData 运行真实 SQLite、托盘、最小挂件与开关操作，以及断网的随包 MediaPipe 推理（Chromium 模拟摄像头）。这些检查不替代浏览器下载隔离后的首次批准、物理摄像头或真实系统电源事件；本次结果见[发布验证记录](release-beta-3-validation.md)。
 
 桌面挂件回归还覆盖旧设置补值、三个开关独立性、鼠标离开两秒后的局部淡化、键盘与菜单恢复，以及 macOS 跟随开关引起的窗口重建。自动化窗口标志不能证明实际跨原生全屏显示，也不能替代 Dock、Cmd-Tab、外接屏和 Windows 原生窗口的真机检查；本轮结果见[桌面挂件验证](desktop-widget-validation.md)。
