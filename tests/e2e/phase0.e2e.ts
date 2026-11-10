@@ -735,10 +735,10 @@ test("opens settings and statistics at the minimum size and preserves scrollable
       };
     });
   }
-  const expectWindowsCaption = async (color: string, background: string) => {
+  const expectSettingsTheme = async (color: string, background: string) => {
+    await expect(window.locator(".pageSurface")).toHaveCSS("background-color", background);
     if (process.platform !== "win32") return;
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => Reflect.get(BrowserWindow.getAllWindows()[0]!, "lastTestCaptionColor"))).toBe(color);
-    await expect(window.locator("body")).toHaveCSS("background-color", background);
   };
   await expect(window.locator("time")).toHaveText("30:00");
   await resizeContent(app, window, 160, 180);
@@ -755,22 +755,23 @@ test("opens settings and statistics at the minimum size and preserves scrollable
   await window.getByRole("button", { name: "保存设置" }).click();
   await expect(window.getByText("已保存")).toBeVisible();
   await expect(window.locator("html")).toHaveAttribute("data-theme", "light");
-  await expectWindowsCaption("#f4f1eb", "rgb(244, 241, 235)");
+  await expectSettingsTheme("#f4f1eb", "rgb(244, 241, 235)");
   await window.getByRole("button", { name: "深色" }).click();
   await window.getByRole("button", { name: "保存设置" }).click();
+  await expect(window.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(window.locator("html")).toHaveClass(/dark/);
-  await expectWindowsCaption("#252b39", "rgb(37, 43, 57)");
+  await expectSettingsTheme("#252b39", "rgb(37, 43, 57)");
   await window.getByRole("button", { name: "跟随系统" }).click();
   await window.emulateMedia({ colorScheme: "dark" });
   if (process.platform === "win32") await app.evaluate(({ nativeTheme }) => { nativeTheme.themeSource = "dark"; });
   await window.getByRole("button", { name: "保存设置" }).click();
   await expect(window.locator("html")).toHaveAttribute("data-theme", "system");
   await expect(window.locator("html")).toHaveClass(/dark/);
-  await expectWindowsCaption("#252b39", "rgb(37, 43, 57)");
+  await expectSettingsTheme("#252b39", "rgb(37, 43, 57)");
   await window.emulateMedia({ colorScheme: "light" });
   if (process.platform === "win32") await app.evaluate(({ nativeTheme }) => { nativeTheme.themeSource = "light"; });
   await expect(window.locator("html")).not.toHaveClass(/dark/);
-  await expectWindowsCaption("#f4f1eb", "rgb(244, 241, 235)");
+  await expectSettingsTheme("#f4f1eb", "rgb(244, 241, 235)");
   await window.getByRole("button", { name: /计时器/ }).click();
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
   await window.getByRole("button", { name: "打开统计" }).click();
