@@ -16,6 +16,8 @@ PR 和 `main` 的每轮 CI 均覆盖三个构建目标；发布工作流也分�
 
 三个目标均使用 Node.js 24，执行 `npm ci`、lint、类型检查、单元与组件测试、真实 SQLite 测试和完整 Electron E2E，然后构建最终安装包并运行安装后检查。任何步骤失败都会使该目标检查失败，并在有诊断产物时上传它们。
 
+每个目标通过安装后检查后上传已验证的安装包，分别命名为 `installers-mac-arm64`、`installers-mac-x64` 和 `installers-windows-x64`，在该次 GitHub Actions 运行的 Artifacts 中保留 14 天。PR 包对应该次源码提交，不替代已发布版本；此工作流不创建发布 tag，也不公开发布 GitHub Release。
+
 ## 最终安装包检查
 
 macOS 两个架构均使用不依赖开发者证书的 ad hoc 签名，PR 构建也启用该签名流程。`npm run test:packaging` 检查应用及原生 SQLite 模块的严格签名、hardened runtime、摄像头用途声明和 entitlement；再复制应用，分别篡改 `app.asar` 与原生模块，确认校验拒绝这两种改动。`smoke-mac-dmg.mjs` 随后只读挂载最终 DMG，保留扩展属性复制安装到独立临时目录，重新验签并启动复制后的应用。
