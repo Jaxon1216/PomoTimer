@@ -64,7 +64,7 @@ export type TimerSnapshot = z.infer<typeof timerSnapshotSchema>;
 
 export const settingsSchema = z.object({
   version: z.literal(1),
-  focusDurationSeconds: z.number().int().min(300).max(7200),
+  focusDurationSeconds: z.number().int().min(60).max(7200),
   shortBreakDurationSeconds: z.number().int().min(60).max(3600),
   longBreakDurationSeconds: z.number().int().min(60).max(5400),
   focusRoundsPerCycle: z.number().int().min(1).max(8),

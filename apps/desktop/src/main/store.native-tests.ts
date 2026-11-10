@@ -62,6 +62,20 @@ test("new installations enable all appearance options and persist independent op
   } finally { reopened.close(); }
 }));
 
+test("persists a one-minute focus setting and reloads it into a fresh timer", () => withDirectory((directory) => {
+  const selected = { ...defaultSettings, focusDurationSeconds: 60 };
+  const store = new SqliteStore(directory);
+  try { store.saveSettings(selected); } finally { store.close(); }
+
+  const reopened = new SqliteStore(directory);
+  try {
+    assert.deepEqual(reopened.loadSettings(), selected);
+    const engine = new TimerEngine(reopened, { now: () => 0, wallDate: () => new Date(0) });
+    assert.equal(engine.snapshot.round.totalDurationMs, 60_000);
+    assert.equal(engine.snapshot.remainingMs, 60_000);
+  } finally { reopened.close(); }
+}));
+
 for (const alwaysOnTop of [false, true]) {
   test(`old settings retain alwaysOnTop=${alwaysOnTop} and enable only the missing appearance fields`, () => withDirectory((directory) => {
     const legacy = new Database(join(directory, "pomodoro.sqlite"));

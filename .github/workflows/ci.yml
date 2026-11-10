@@ -19,12 +19,15 @@ jobs:
         # Match the release runner's Visual Studio 2022 toolchain for Electron's native SQLite module.
         include:
           - os: macos-latest
+            platform: mac
             arch: arm64
             builder_args: --mac dmg --arm64
           - os: windows-2022
+            platform: windows
             arch: x64
             builder_args: --win nsis --x64
           - os: macos-15-intel
+            platform: mac
             arch: x64
             builder_args: --mac dmg --x64
     env:
@@ -59,6 +62,15 @@ jobs:
       - name: Install and verify final Windows installer
         if: runner.os == 'Windows'
         run: node scripts/smoke-windows-installer.mjs
+      - name: Upload verified installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

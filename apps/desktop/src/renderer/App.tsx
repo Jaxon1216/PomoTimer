@@ -326,7 +326,7 @@ function TimerView({
 }
 
 const numericSettings = {
-  focusDurationSeconds: { label: "专注时长", min: 5, max: 120, scale: 60, hint: "分钟 · 下一轮生效" },
+  focusDurationSeconds: { label: "专注时长", min: 1, max: 120, scale: 60, hint: "分钟 · 下一轮生效" },
   shortBreakDurationSeconds: { label: "短休时长", min: 1, max: 60, scale: 60, hint: "分钟 · 下一轮生效" },
   longBreakDurationSeconds: { label: "长休时长", min: 1, max: 90, scale: 60, hint: "分钟 · 下一轮生效" },
   inputIdleThresholdSeconds: { label: "输入闲置阈值", min: 10, max: 600, scale: 1, hint: "秒 · 下次输入样本生效" },
@@ -525,7 +525,7 @@ function SettingsView({
             </label>
             <p className="infoNote" id="auto-fade-hint">鼠标离开计时器两秒后淡化背景和辅助信息，移入恢复。数字、状态与操作保持清晰。</p>
             <label className="toggleRow">
-              <span>完成与暂停通知</span>
+              <span>完成弹窗与暂停通知</span>
               <input type="checkbox" checked={draft.notificationsEnabled} onChange={(event) => set("notificationsEnabled", event.target.checked)} />
             </label>
           </section>

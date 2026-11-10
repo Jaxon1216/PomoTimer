@@ -1,4 +1,4 @@
-import { timerSnapshotSchema, type Presence, type PresenceSource, type Round, type Settings, type TimerCommand, type TimerSnapshot } from "../shared/contracts.js";
+import { timerSnapshotSchema, type Presence, type PresenceSource, type Round, type RoundKind, type Settings, type TimerCommand, type TimerSnapshot } from "../shared/contracts.js";
 import { checkpointOf, type TimerCheckpoint } from "./checkpoint.js";
 
 export interface CompletedSession {
@@ -11,6 +11,20 @@ export interface CompletedSession {
   plannedDurationSeconds: number;
   activeDurationSeconds: number;
   mode: "seated";
+}
+
+// CompletedRound 是当前进程内最后一次成功提交的自然完成信息。
+//
+// 领域：Timer / 完成事件
+// 顺序：tick -> Store 完成写入 -> Main 读取 completedRound。
+// 作用：为主进程提供完成轮次、下一轮及与完成计数对应的版本。
+// 原因：提醒只能来自成功落盘的自然完成，不能由读取快照或跳轮推断。
+// 边界：只保存在内存中，不加入检查点；重启后由下一次自然完成重新生成。
+export interface CompletedRound {
+  readonly revision: number;
+  readonly completedKind: RoundKind;
+  readonly nextKind: RoundKind;
+  readonly completedAt: string;
 }
 
 export interface TimerStore {
@@ -60,6 +74,7 @@ export class TimerEngine {
   private screenLocked = false;
   private storageFailed = false;
   private completedRoundsRevisionValue = 0;
+  private completedRoundValue: CompletedRound | undefined;
   private persistedState = "";
   private emittedAutomation = "";
   private activeCycleRounds: number;
@@ -106,6 +121,10 @@ export class TimerEngine {
 
   get completedRoundsRevision(): number {
     return this.completedRoundsRevisionValue;
+  }
+
+  get completedRound(): CompletedRound | undefined {
+    return this.completedRoundValue ? { ...this.completedRoundValue } : undefined;
   }
 
   setInputAvailability(available: boolean): TimerSnapshot {
@@ -406,13 +425,14 @@ export class TimerEngine {
     this.snapshotValue.emittedAt = new Date().toISOString();
 
     try {
+      const date = this.clock.wallDate();
+      const completedAt = date.toISOString();
       if (current.kind === "focus" && current.focusRoundNumber) {
-        const date = this.clock.wallDate();
         this.store.commitCompletedSessionAndSnapshot(
           {
             // A round identity is stable across retries and process restarts.
             id: `focus-${current.cycleNumber}-${current.focusRoundNumber}`,
-            completedAt: date.toISOString(),
+            completedAt,
             localDate: date.toLocaleDateString("sv-SE"),
             localOffsetMinutes: -date.getTimezoneOffset(),
             cycleNumber: current.cycleNumber,
@@ -429,6 +449,12 @@ export class TimerEngine {
       this.persistedState = this.snapshotState();
       this.emittedAutomation = JSON.stringify(this.snapshotValue.automation);
       this.completedRoundsRevisionValue += 1;
+      this.completedRoundValue = {
+        revision: this.completedRoundsRevisionValue,
+        completedKind: current.kind,
+        nextKind: this.snapshotValue.round.kind,
+        completedAt,
+      };
     } catch (error) {
       // Keep the just-finished round retryable. The Store transaction has
       // rolled back both the record and snapshot when this path is reached.

@@ -95,9 +95,22 @@ try {
     assert.equal(await window.evaluate(() => Reflect.get(window, "cameraSmokeProbe").requests), 1);
     cameraResult = { fakeSwitches, inference: "away", localResourceRequests: requests.length, released: true };
   }
-  console.log(JSON.stringify({ kind: "development-smoke", command: "npm run dev", identity, rendererUrl: window.url(), camera: cameraResult }, null, 2));
+  const reminderReady = application.waitForEvent("window");
+  await window.evaluate(() => window.pomodoro.command("resume"));
+  await application.evaluate((_, elapsed) => {
+    const now = performance.now.bind(performance);
+    Object.defineProperty(performance, "now", { configurable: true, value: () => now() + elapsed });
+  }, paused.remainingMs + 1);
+  const reminder = await reminderReady;
+  await expect(reminder.getByRole("heading", { name: "专注完成", exact: true })).toBeVisible();
+  assert.equal(new URL(reminder.url()).origin, new URL(identity.devServerUrl).origin);
+  assert.deepEqual(await reminder.evaluate(() => Object.keys(window.pomodoro).sort()), ["dismissReminder", "getReminder", "subscribeReminder"]);
+  await reminder.getByRole("button", { name: "知道了", exact: true }).click();
+  assert.equal(await reminder.evaluate(() => window.pomodoro.getReminder()), null);
+  console.log(JSON.stringify({ kind: "development-smoke", command: "npm run dev", identity, rendererUrl: window.url(), camera: cameraResult, reminder: "shown-and-dismissed" }, null, 2));
   console.log("Development: real npm run dev, isolated userData, main/renderer identity, actual tray and IPC controls passed.");
   if (cameraSmoke) console.log("Development camera: explicit opt-in, synthetic device, real local inference, same-origin resources, manual pause lock and device release passed.");
+  console.log("Development reminder: real dev URL, separate sandbox preload, visible natural completion and acknowledgment passed.");
 } finally {
   try {
     if (application) await application.close();
