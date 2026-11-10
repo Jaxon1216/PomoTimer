@@ -326,7 +326,7 @@ function TimerView({
 }
 
 const numericSettings = {
-  focusDurationSeconds: { label: "专注时长", min: 5, max: 120, scale: 60, hint: "分钟 · 下一轮生效" },
+  focusDurationSeconds: { label: "专注时长", min: 1, max: 120, scale: 60, hint: "分钟 · 下一轮生效" },
   shortBreakDurationSeconds: { label: "短休时长", min: 1, max: 60, scale: 60, hint: "分钟 · 下一轮生效" },
   longBreakDurationSeconds: { label: "长休时长", min: 1, max: 90, scale: 60, hint: "分钟 · 下一轮生效" },
   inputIdleThresholdSeconds: { label: "输入闲置阈值", min: 10, max: 600, scale: 1, hint: "秒 · 下次输入样本生效" },

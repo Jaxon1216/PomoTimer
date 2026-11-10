@@ -950,6 +950,39 @@ describe("TimerEngine", () => {
     expect(restored.snapshot.activeCycleRounds).toBe(1);
   });
 
+  it("applies a one-minute focus to the next round and completes once after sixty active seconds", () => {
+    const { engine, clock, store } = create();
+    engine.command("start");
+    clock.advance(5_000);
+    engine.applySettings({ focusDurationSeconds: 60 });
+    expect(engine.snapshot.round.totalDurationMs).toBe(defaultSettings.focusDurationSeconds * 1000);
+    expect(engine.snapshot.remainingMs).toBe(defaultSettings.focusDurationSeconds * 1000 - 5_000);
+
+    engine.command("next");
+    const nextFocus = engine.command("next");
+    expect(nextFocus.round.kind).toBe("focus");
+    expect(nextFocus.remainingMs).toBe(60_000);
+    expect(nextFocus.round.totalDurationMs).toBe(60_000);
+    engine.command("start");
+    clock.advance(20_000);
+    expect(engine.command("pause").remainingMs).toBe(40_000);
+    clock.advance(60_000);
+    expect(engine.inputSample(0).remainingMs).toBe(40_000);
+    expect(engine.snapshot.status).toBe("manual-paused");
+    engine.command("resume");
+    clock.advance(39_999);
+    expect(engine.snapshot.remainingMs).toBe(1);
+    expect(store.sessions).toHaveLength(0);
+    clock.advance(1);
+    expect(engine.snapshot.round.kind).toBe("short-break");
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0]).toMatchObject({ plannedDurationSeconds: 60, activeDurationSeconds: 60 });
+    expect(engine.completedRoundsRevision).toBe(1);
+    expect(engine.snapshot.round.kind).toBe("short-break");
+    expect(store.sessions).toHaveLength(1);
+    expect(engine.completedRoundsRevision).toBe(1);
+  });
+
   it("restores a running snapshot as a safe automatic pause", () => {
     const first = create();
     first.engine.command("start");

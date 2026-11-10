@@ -20,6 +20,52 @@ async function readReminder(page: Page) {
   return page.evaluate(() => (window as unknown as { pomodoro: ReminderApi }).pomodoro.getReminder());
 }
 
+test("saves a one-minute focus, completes it naturally and reloads the setting", async ({}, testInfo) => {
+  const userData = testInfo.outputPath("user-data");
+  mkdirSync(userData, { recursive: true });
+  const launch = () => electron.launch({
+    executablePath: packagedExecutable,
+    args: applicationArguments(userData),
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" },
+  });
+  let application = await launch();
+  try {
+    const timer = await application.firstWindow();
+    await expect(timer.getByRole("button", { name: "开始计时" })).toBeVisible();
+    await application.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+    await timer.getByRole("button", { name: "更多操作" }).click();
+    await timer.getByRole("menuitem", { name: "打开设置" }).click();
+    await expect(timer.getByLabel("专注时长")).toHaveAttribute("min", "1");
+    await timer.getByLabel("专注时长").fill("1");
+    await timer.getByRole("button", { name: "保存设置" }).click();
+    await expect(timer.getByText("已保存", { exact: true })).toBeVisible();
+    expect((await timer.evaluate(() => window.pomodoro.getSettings())).focusDurationSeconds).toBe(60);
+    expect((await timer.evaluate(() => window.pomodoro.getSnapshot())).round.totalDurationMs).toBe(1_800_000);
+    await timer.getByRole("button", { name: "返回计时器" }).click();
+    await timer.getByRole("button", { name: "跳到下一轮" }).click();
+    await timer.getByRole("button", { name: "跳到下一轮" }).click();
+    await expect(timer.locator("time")).toHaveText("01:00");
+    await timer.getByRole("button", { name: "开始计时" }).click();
+    await advance(application, 30_000);
+    expect((await timer.evaluate(() => window.pomodoro.getSnapshot())).remainingMs).toBeGreaterThan(0);
+    const reminderReady = application.waitForEvent("window");
+    await advance(application, 30_001);
+    const reminder = await reminderReady;
+    await expect(reminder.getByRole("heading", { name: "专注完成" })).toBeVisible();
+    expect((await timer.evaluate(() => window.pomodoro.getStatistics())).today.completedFocusMinutes).toBe(1);
+    expect((await timer.evaluate(() => window.pomodoro.getStatistics())).today.completedFocusRounds).toBe(1);
+    await reminder.getByRole("button", { name: "知道了", exact: true }).click();
+    await application.close();
+    application = await launch();
+    const restored = await application.firstWindow();
+    await restored.waitForFunction(() => Boolean(window.pomodoro));
+    expect((await restored.evaluate(() => window.pomodoro.getSettings())).focusDurationSeconds).toBe(60);
+    expect((await restored.evaluate(() => window.pomodoro.getStatistics())).today.completedFocusMinutes).toBe(1);
+  } finally {
+    await application.close();
+  }
+});
+
 test("shows a silent persistent completion card over another window without taking focus", async ({}, testInfo) => {
   const userData = testInfo.outputPath("user-data");
   mkdirSync(userData, { recursive: true });

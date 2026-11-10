@@ -722,8 +722,9 @@ describe("App", () => {
   });
 
   it.each([
-    ["专注时长", "", "请输入 5–120 之间的整数"],
-    ["专注时长", "4", "请输入 5–120 之间的整数"],
+    ["专注时长", "", "请输入 1–120 之间的整数"],
+    ["专注时长", "0", "请输入 1–120 之间的整数"],
+    ["专注时长", "1.5", "请输入 1–120 之间的整数"],
     ["短休时长", "1.5", "请输入 1–60 之间的整数"],
     ["长休时长", "91", "请输入 1–90 之间的整数"],
     ["输入闲置阈值", "601", "请输入 10–600 之间的整数"],
@@ -738,6 +739,18 @@ describe("App", () => {
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(window.pomodoro.updateSettings).not.toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: "设置" })).toBeVisible();
+  });
+
+  it("saves a one-minute focus duration from settings", async () => {
+    render(<App />);
+    await openSettings();
+    const input = screen.getByRole("spinbutton", { name: "专注时长" });
+    expect(input).toHaveAttribute("min", "1");
+    expect(input).toHaveAttribute("max", "120");
+    fireEvent.change(input, { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(window.pomodoro.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ focusDurationSeconds: 60 })));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps failed settings saves local and allows retry without losing the draft", async () => {
