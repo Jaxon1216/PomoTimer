@@ -92,7 +92,7 @@ $shortcuts = @(foreach ($kind in $shortcutDirectories.Keys) {
     [pscustomobject]@{ kind = $kind; path = $path; exists = [bool]$present; target = $target }
   }
 })
-$tracked = @($env:POMODORO_INSTALLER_REGISTRY_PATHS | ConvertFrom-Json)
+$tracked = ConvertFrom-Json -InputObject $env:POMODORO_INSTALLER_REGISTRY_PATHS
 $registry = @(foreach ($path in $tracked) {
   [pscustomobject]@{ path = $path; exists = [bool](Test-Path -LiteralPath $path) }
 })
