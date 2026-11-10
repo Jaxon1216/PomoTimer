@@ -17,7 +17,23 @@ jobs:
       fail-fast: false
       matrix:
         # Match the release runner's Visual Studio 2022 toolchain for Electron's native SQLite module.
-        os: [macos-latest, windows-2022]
+        include:
+          - os: macos-latest
+            arch: arm64
+            builder_args: --mac dmg --arm64
+          - os: windows-2022
+            arch: x64
+            builder_args: --win nsis --x64
+          - os: macos-15-intel
+            arch: x64
+            builder_args: --mac dmg --x64
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # The custom ad hoc signer needs no credentials and is safe for pull requests.
+      CSC_FOR_PULL_REQUEST: "true"
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,6 +46,19 @@ jobs:
       - run: npm run test
       - run: npm run test:store
       - run: npm run test:e2e
+      - name: Build final installer
+        run: npm exec --workspace=@pomodoro/desktop -- electron-builder ${{ matrix.builder_args }} --publish never
+      - name: Verify macOS signatures and reject tampering
+        if: runner.os == 'macOS'
+        run: npm run test:packaging
+      - name: Install and verify final macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          pomodot_version="$(node -p "require('./apps/desktop/package.json').version")"
+          node scripts/smoke-mac-dmg.mjs "apps/desktop/dist/Pomodot-${pomodot_version}-mac-${{ matrix.arch }}.dmg"
+      - name: Install and verify final Windows installer
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-windows-installer.mjs
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

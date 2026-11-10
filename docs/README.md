@@ -7,6 +7,7 @@
 | 周期、阶段和完成量有什么区别？ | [领域词汇](../GLOSSARY.md)区分当前位置、已完成专注和休息准备期。 |
 | 用户会看到什么，怎样判断行为正确？ | [产品规格](./product-spec.md)含计时状态机、设置、界面、故障与验收场景。 |
 | 现在做什么，还有哪些真机检查？ | [路线图](./roadmap.md)区分当前阶段、发布门和后续阶段。 |
+| beta.3 安装包做了哪些验证？ | [发布验证](./release-beta-3-validation.md)记录平台、构建、签名、安装后检查与真实设备边界；[CI 说明](./ci.md)列出三个构建目标与合并门槛。 |
 | 谁持有计时状态，谁能读写数据库？ | [技术架构](./architecture.md)定义进程职责、时间来源和测试边界。 |
 | 可以发送哪些命令和事件？数据怎样保存？ | [IPC 与持久化契约](./contracts.md)列出接口、快照、事件和数据库模型。 |
 | 一个界面操作怎样传到 Main 并返回？ | [前端请求流程](./request-flow.md)追踪命令、采样和统计，并说明原生窗口缩放。 |
@@ -39,15 +40,26 @@
 
 安装包发布在 [GitHub Releases](https://github.com/Jaxon1216/PomoTimer/releases)：Windows x64 使用 EXE 安装向导，Apple 芯片与 Intel Mac 分别使用对应 DMG。
 
-发版前，把[变更记录](../CHANGELOG.md)的 `Unreleased` 条目整理到与 tag 对应的版本段（例如 `## [0.1.0-beta.2]`），填写「改动」和「已知问题」。[发布脚本](../scripts/prepare-release.mjs)会读取这个版本段，和安装包链接一起生成 GitHub 发布说明。
+发版前，把[变更记录](../CHANGELOG.md)的 `Unreleased` 条目整理到与 tag 对应的版本段（例如 `## [0.1.0-beta.3]`），填写「改动」和「已知问题」。[发布脚本](../scripts/prepare-release.mjs)会读取这个版本段，和安装包链接一起生成 GitHub 发布说明。
 
-推送与根目录及 desktop package version 一致的 `v*` tag，会触发 Release 工作流。三个平台分别运行检查、E2E、安装包构建及打包应用启动测试；全部成功后才上传 SHA256SUMS 并发布预发布版本。打包应用的检查可在对应系统执行 `node scripts/smoke-packaged.mjs`。
+推送与根目录及 desktop package version 一致的 `v*` tag，会触发 Release 工作流。macOS ARM64、macOS Intel x64 与 Windows x64 分别运行检查、完整 E2E、最终安装包构建及安装后检查；全部成功后才上传 SHA256SUMS 并发布预发布版本。PR CI 也覆盖相同三个目标及安装检查，见 [CI 矩阵](./ci.md#触发与取消)。
 
-当前构建没有开发者证书签名或 macOS 公证，真实系统输入、通知、锁屏、睡眠及人工安装验证仍属发布门。每次发布说明必须列出尚未修复的已知问题，不能把自动化启动测试当作平台验收。
+macOS 构建使用免费的 ad hoc 完整性签名，没有 Developer ID 签名或 Apple 公证，首次打开可能需要按[项目首页](../README.md#macos-首次打开)在系统设置中手动批准。Windows 构建没有开发者证书签名。真实系统输入、通知、锁屏、睡眠、摄像头权限及人工安装验证仍属发布门。每次发布说明必须列出尚未修复的已知问题，不能把自动化启动测试当作平台验收。
 
 ## 本地原生回归
 
-`npm run test:e2e` 使用临时数据目录启动真实 Electron，核对 Main 的 PID、实际 `userData`、窗口布局和 Tray。`npm run package` 后执行 `node scripts/smoke-packaged.mjs` 验证打包应用；macOS 开发入口另执行 `node scripts/smoke-dev.mjs`。后者通过 `npm run dev -- -- -- <Electron 参数>` 跨两层 npm 将 inspector 和 `--user-data-dir` 传给 electron-vite，验证 Vite 页面来源及 IPC，结束时关闭自己启动的进程。不能仅设置 `ELECTRON_CLI_ARGS`，因为 electron-vite CLI 会用其解析出的参数覆盖该环境变量。显式诊断启动还会在打开数据库前核对实际目录与预期目录，参数未透传时立即退出。
+`npm run test:e2e` 使用临时数据目录启动真实 Electron，核对 Main 的 PID、实际 `userData`、窗口布局和 Tray。`npm run package` 生成本机安装包后，按平台执行以下检查：
+
+| 命令 | 范围 |
+| --- | --- |
+| `npm run test:packaging` | 仅 macOS；检查默认打包应用的 ad hoc 签名、摄像头声明 / entitlement，并确认资源和原生 SQLite 模块被篡改后会拒绝校验。指定其他应用路径时可用 `node scripts/test-mac-signature.mjs <app-path>`。 |
+| `node scripts/smoke-mac-dmg.mjs <dmg-path>` | 仅 macOS；从最终 DMG 复制安装到临时目录，验签并运行安装后的增强检查。 |
+| `node scripts/smoke-windows-installer.mjs` | 仅 Windows；静默安装当前版本的最终 NSIS EXE，并运行安装后的增强检查。 |
+| `node scripts/smoke-packaged.mjs` | 直接检查默认打包应用；通过绝对路径环境变量 `POMODORO_SMOKE_EXECUTABLE` 可选择指定安装实例。覆盖计时、统计、托盘、默认触控、离线本地模型推断和挂件交互。 |
+
+打包后的摄像头检查使用模拟视频流和真实本地模型，隔离数据与临时安装目录会在测试结束后清理；不能据此宣称物理摄像头、浏览器下载、Finder 启动或 Gatekeeper 批准通过。实际记录见 [beta.3 发布验证](./release-beta-3-validation.md)。
+
+macOS 开发入口另执行 `node scripts/smoke-dev.mjs`，通过 `npm run dev -- -- -- <Electron 参数>` 跨两层 npm 将 inspector 和 `--user-data-dir` 传给 electron-vite，验证 Vite 页面来源及 IPC，结束时关闭自己启动的进程。不能仅设置 `ELECTRON_CLI_ARGS`，因为 electron-vite CLI 会用其解析出的参数覆盖该环境变量。显式诊断启动还会在打开数据库前核对实际目录与预期目录，参数未透传时立即退出。
 
 `npm run test:store` 重建 Electron 原生依赖，并用 Electron 的 Node 运行时验证真实 SQLite 升级、事务回滚、去重、损坏备份和 WAL 恢复；测试只使用临时数据。普通 PR 和发布 CI 都运行该命令及完整 E2E。E2E 中的锁屏事件和输入故障为受控注入，不能视为真实设备的电源、输入或通知验收。
 
