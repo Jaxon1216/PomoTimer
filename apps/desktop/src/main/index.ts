@@ -7,6 +7,7 @@ import { CameraMonitor } from "./camera-monitor.js";
 import { allowsCameraPermission } from "./camera-permission.js";
 import { SqliteStore, StoreRecoveryError, rebuildSqliteStore } from "./store.js";
 import { TimerEngine } from "./timer.js";
+import { CompletionReminders } from "./completion-reminders.js";
 import { WindowLayout, initialContentSize, windowsCaptionHeight } from "./window-layout.js";
 import { collectStatistics, localDateKey } from "./statistics.js";
 import { readDesktopView, isRendererDocument, type DesktopView } from "../shared/window-view.js";
@@ -33,6 +34,8 @@ let lastTrayState = "";
 const trayToolTip = "Pomodoro Timer";
 const windowLayout = new WindowLayout(process.platform, (bounds) => screen.getDisplayMatching(bounds).workArea,
   process.platform === "win32" ? windowsCaptionHeight : 0);
+const reminders = new CompletionReminders(rendererUrl, () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : undefined,
+  () => broadcast({ type: "core.error", code: "REMINDER_UNAVAILABLE", message: "完成提醒未能显示，请打开计时器查看当前轮次。计时与本地记录不受影响。", recoverable: true }));
 
 // 领域：Electron / 生命周期
 // 顺序：应用启动链第 1 站，OS 启动 -> 单实例锁 -> Main 初始化。
@@ -82,6 +85,10 @@ const capabilities = capabilitiesSchema.parse({ inputMonitoring: process.platfor
 function assertSender(event: IpcMainInvokeEvent): void { if (event.sender.id !== mainWindow?.webContents.id || event.senderFrame !== event.sender.mainFrame) throw new Error("不支持的 IPC 调用来源"); }
 function currentEngine(): TimerEngine { if (!engine) throw new Error("计时核心尚未初始化"); return engine; }
 function rendererUrl(): string { return new URL(process.env["ELECTRON_RENDERER_URL"] ?? pathToFileURL(join(__dirname, "../renderer/index.html")).toString()).href; }
+function reminderTheme(): "light" | "dark" {
+  const theme = currentEngine().settings.theme;
+  return theme === "system" ? nativeTheme.shouldUseDarkColors ? "dark" : "light" : theme;
+}
 function syncCamera(): void {
   const enabled = capabilities.cameraPresence && currentEngine().settings.focusPresenceSource === "camera"
     && rendererReady && !suspended && !screenLocked && !runtimeFailure && !quitting;
@@ -124,12 +131,24 @@ function publishSnapshot(snapshot = currentEngine().snapshot): void {
   }
   if (lastCompletedRoundRevision !== currentEngine().completedRoundsRevision) {
     lastCompletedRoundRevision = currentEngine().completedRoundsRevision;
-    notify("轮次完成", `已进入${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"}`);
+    const completed = currentEngine().completedRound;
+    if (completed && currentEngine().settings.notificationsEnabled && !quitting) {
+      // 领域：Electron / 已提交完成反馈
+      // 顺序：完成链第 1 站，TimerEngine 提交结果 -> 独立提醒窗口。
+      // 作用：每次自然完成至多呈现一次无声卡片，最新完成替换旧提醒。
+      // 原因：页面切轮和系统通知都不能保证用户看到已完成的轮次。
+      // 边界：界面失败不升级为 SQLite 故障，不改变下一轮感知或计时规则。
+      try {
+        reminders.present({ id: completed.revision, completedKind: completed.completedKind, nextKind: completed.nextKind, completedAt: completed.completedAt, theme: reminderTheme() });
+      } catch {
+        broadcast({ type: "core.error", code: "REMINDER_UNAVAILABLE", message: "完成提醒未能显示，请打开计时器查看当前轮次。计时与本地记录不受影响。", recoverable: true });
+      }
+    }
   }
 }
 function notify(title: string, body: string): void {
   if (!currentEngine().settings.notificationsEnabled || !Notification.isSupported()) return;
-  try { new Notification({ title, body }).show(); } catch { console.warn("系统通知不可用"); }
+  try { new Notification({ title, body, silent: true }).show(); } catch { console.warn("系统通知不可用"); }
 }
 function updateTray(snapshot: TimerSnapshot): void {
   if (!tray) return;
@@ -157,6 +176,7 @@ function updateTray(snapshot: TimerSnapshot): void {
 function failRuntime(reason: unknown): void {
   if (runtimeFailure) return;
   runtimeFailure = new Error(`本地数据不可用，计时已安全暂停。请重新打开应用重试。${reason instanceof Error ? ` ${reason.message}` : ""}`);
+  reminders.clear();
   if (camera.setEnabled(false, performance.now())) broadcast({ type: "camera.state", state: camera.state });
   if (monitorTimer) clearInterval(monitorTimer);
   if (tickTimer) clearInterval(tickTimer);
@@ -316,6 +336,7 @@ function queueWindowReplacement(): void {
 }
 function showWindow(): void { if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow(); else { if (mainWindow.isMinimized()) mainWindow.restore(); app.focus({ steal: false }); mainWindow.show(); mainWindow.focus(); } }
 function installIpc(): void {
+  reminders.installIpc();
   ipcMain.handle("pomodoro:get-snapshot", (event) => { assertSender(event); if (runtimeFailure) throw runtimeFailure; return coreOperation(() => { const snapshot = currentEngine().snapshot; publishSnapshot(snapshot); return timerSnapshotSchema.parse(snapshot); }); });
   ipcMain.handle("pomodoro:get-settings", (event) => { assertSender(event); return settingsSchema.parse(currentEngine().settings); });
   ipcMain.handle("pomodoro:get-capabilities", (event) => { assertSender(event); return capabilities; });
@@ -345,6 +366,8 @@ function installIpc(): void {
       const settings = currentEngine().applySettings(patch);
       syncCamera();
       broadcast({ type: "settings.changed", settings });
+      if (!settings.notificationsEnabled) reminders.clear();
+      reminders.setTheme(reminderTheme());
       mainWindow?.setAlwaysOnTop(settings.alwaysOnTop);
       queueWindowReplacement();
       if (process.platform === "win32" && patch.theme) { mainWindow?.setTitleBarOverlay(windowsCaption()); mainWindow?.setBackgroundColor(windowsCaption().color); }
@@ -358,10 +381,10 @@ function startMonitoring(): void {
     backgroundOperation(() => { if (camera.expired(performance.now())) fallbackCamera("摄像头检测响应超时"); sampleInput(); });
   }, 1000);
   tickTimer = setInterval(() => backgroundOperation(() => { if (camera.expired(performance.now())) fallbackCamera("摄像头检测响应超时"); publishSnapshot(); }), 500);
-  powerMonitor.on("suspend", () => backgroundOperation(() => { suspended = true; publishSnapshot(currentEngine().systemSuspend()); syncCamera(); notify("计时已暂停", "系统进入睡眠，恢复后等待安全条件继续计时"); }));
-  powerMonitor.on("resume", () => backgroundOperation(() => { suspended = false; syncCamera(); publishSnapshot(); }));
-  powerMonitor.on("lock-screen", () => backgroundOperation(() => { screenLocked = true; publishSnapshot(currentEngine().systemLock()); syncCamera(); }));
-  powerMonitor.on("unlock-screen", () => backgroundOperation(() => { screenLocked = false; publishSnapshot(currentEngine().systemUnlock()); syncCamera(); }));
+  powerMonitor.on("suspend", () => backgroundOperation(() => { suspended = true; reminders.setBlocked(true); publishSnapshot(currentEngine().systemSuspend()); syncCamera(); notify("计时已暂停", "系统进入睡眠，恢复后等待安全条件继续计时"); }));
+  powerMonitor.on("resume", () => backgroundOperation(() => { suspended = false; reminders.setBlocked(screenLocked); syncCamera(); publishSnapshot(); }));
+  powerMonitor.on("lock-screen", () => backgroundOperation(() => { screenLocked = true; reminders.setBlocked(true); publishSnapshot(currentEngine().systemLock()); syncCamera(); }));
+  powerMonitor.on("unlock-screen", () => backgroundOperation(() => { screenLocked = false; reminders.setBlocked(suspended); publishSnapshot(currentEngine().systemUnlock()); syncCamera(); }));
 }
 app.whenReady().then(() => {
   if (!ownsInstanceLock) return;
@@ -408,6 +431,7 @@ app.whenReady().then(() => {
     lastStatisticsRevision = store.completedSessionsRevision;
     lastStatisticsDate = localDateKey(new Date());
     installIpc();
+    nativeTheme.on("updated", () => reminders.setTheme(reminderTheme()));
     mainWindow = createWindow();
     const trayIcon = process.platform === "win32" ? "pomodoro-timer.ico" : process.platform === "darwin" ? "trayTemplate.png" : "pomodoro-timer.png";
     const trayIconDirectory = app.isPackaged
@@ -437,6 +461,7 @@ app.whenReady().then(() => {
 });
 app.on("before-quit", () => {
   quitting = true;
+  reminders.dispose();
   if (monitorTimer) clearInterval(monitorTimer);
   if (tickTimer) clearInterval(tickTimer);
   try { if (!runtimeFailure) engine?.systemSuspend(); } catch (reason) { console.error("退出时无法保存计时快照", reason instanceof Error ? reason.message : "本地存储错误"); }

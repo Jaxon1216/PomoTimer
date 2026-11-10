@@ -525,7 +525,7 @@ function SettingsView({
             </label>
             <p className="infoNote" id="auto-fade-hint">鼠标离开计时器两秒后淡化背景和辅助信息，移入恢复。数字、状态与操作保持清晰。</p>
             <label className="toggleRow">
-              <span>完成与暂停通知</span>
+              <span>完成弹窗与暂停通知</span>
               <input type="checkbox" checked={draft.notificationsEnabled} onChange={(event) => set("notificationsEnabled", event.target.checked)} />
             </label>
           </section>

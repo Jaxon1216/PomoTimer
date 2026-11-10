@@ -16,7 +16,7 @@
 | 本地摄像头感知做了哪些验证？ | [摄像头开发验证](./camera-presence-validation.md)记录自动化、打包检查和真机边界。 |
 | 自动休息、空格和模式按钮这轮改了什么？ | [交互对齐记录](./sensing-interaction-design.md)与[修订验证](./sensing-interaction-validation.md)记录已确认规则和交付检查。 |
 | 置顶、桌面跟随和交互淡化如何区分？ | [桌面挂件设计](./desktop-widget-design.md)记录已确认规则和 macOS 方案取舍；[验证记录](./desktop-widget-validation.md)区分当前自动化结果与待执行的实机检查。 |
-| 遮挡反馈与无声完成提醒正在讨论什么？ | [可见性与完成提醒](./visibility-and-completion-reminder-design.md)区分本轮已确认目标、最新主线事实和待定弹窗方案。 |
+| 无声完成弹窗如何工作，遮挡反馈查到了什么？ | [可见性与完成提醒](./visibility-and-completion-reminder-design.md)记录确认方案与主线事实；[验证记录](./completion-reminder-validation.md)区分完成提醒回归与尚未复现的间歇遮挡。 |
 | 字体和视觉参考从哪里来？ | [第三方声明](./third-party-notices.md)说明素材来源。 |
 
 固定原则：本地离线、macOS/Windows 首发、默认 `30/5/30/5/30/10`、输入只传递闲置秒数、不记录敏感输入或相机内容、完成专注才统计、失败检测不伪造可靠 presence。
@@ -32,6 +32,7 @@
 | [休息准备倒数](./assets/screenshots/break-preparation.png) | 无输入达到第 35 秒，提示 5 秒后开始，正式休息仍为完整 5 分钟。 |
 | [拖小窗口](./assets/screenshots/long-break-waiting-compact.png) | 220×240 小窗等待开始 10 分钟活动休息，测试的闲置阈值为 600 秒。 |
 | [最小窗口](./assets/screenshots/drag-minimum-interrupted-break.png) | 在 160×180 的窗口中，短休因输入暂停，可直接点击圆形播放按钮继续。 |
+| [无声完成提醒（浅色）](./assets/screenshots/completion-reminder-light.png) / [深色](./assets/screenshots/completion-reminder-dark.png) | 本轮真实 Electron 的独立 340×240 提醒窗口；专注完成后等待用户确认。 |
 | [设置](./assets/screenshots/settings-dark.png) | 切换到深色主题，开启常驻顶部。 |
 | [统计](./assets/screenshots/stats-dark.png) | 独立测试数据中还没有完成的专注轮。 |
 

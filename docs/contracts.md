@@ -2,7 +2,7 @@
 
 ## 1. IPC allowlist
 
-Renderer 只可通过 `window.pomodoro` 调用以下方法：
+主窗口 Renderer 只可通过 `window.pomodoro` 调用以下方法：
 
 ```ts
 getSnapshot(): Promise<TimerSnapshot>
@@ -30,6 +30,27 @@ interface Capabilities { inputMonitoring: boolean; cameraPresence: boolean; stan
 
 窗口重建只恢复已知页面 fragment：`timer`、`settings`、`stats`，不新增 preload 方法或通用窗口控制 channel。恢复后的主窗口仍须通过相同来源、主 frame 和 Zod 校验。
 
+### 完成提醒窗口
+
+独立提醒窗口通过专用 preload 暴露自身的 `window.pomodoro`，只包含下列方法，不包含主窗口的任一命令、设置或摄像头接口：
+
+```ts
+interface CompletionReminder {
+  id: number; // 当前进程内从 1 开始的成功自然完成版本
+  completedKind: RoundKind;
+  nextKind: RoundKind;
+  completedAt: string; // 带时区的 ISO 完成时间
+  theme: "light" | "dark";
+}
+getReminder(): Promise<CompletionReminder | null>
+dismissReminder(id: number): Promise<boolean>
+subscribeReminder(listener: (reminder: CompletionReminder | null) => void): () => void
+```
+
+Wire channels 为 `pomodoro:get-reminder`、`pomodoro:dismiss-reminder`（严格 `{ id: 正整数 }`）和 Main 推送的 `pomodoro:reminder`。只有当前提醒窗口的主 frame 可调用前两者；其他窗口和子 frame 均拒绝。读取结果和推送 payload 使用相同严格 Zod schema，未知字段拒绝。确认只在 ID 与当前提醒相同时清除并返回 `true`，旧卡片的迟到确认返回 `false`，不能关闭更新后的提醒；无当前条目时读取和推送均为 `null`。
+
+提醒 ID、完成类型和完成时间来自 TimerEngine 成功落盘后的 `completedRound`；读取它不推进时钟。提醒只保存在 Main 内存，不加入 `TimerSnapshot` 或 SQLite。卡片确认不调用 TimerEngine；关闭窗口隐藏复用，重启不恢复历史卡片。`REMINDER_UNAVAILABLE/recoverable=true` 表示卡片界面不可用，计时与已完成记录仍有效。
+
 ## 2. TimerSnapshot
 
 ```ts
@@ -52,6 +73,8 @@ interface TimerSnapshot {
 ## 3. 设置生效
 
 设置范围与产品规格一致：专注 300–7200 秒、短休 60–3600 秒、长休 60–5400 秒、周期 1–8 轮、输入阈值 10–600 秒。主题和常驻顶部立即生效；时长在下一轮同类型轮次生效，周期轮数在下一周期生效，休息模式在下一轮休息生效，输入阈值在下一采样生效。
+
+`notificationsEnabled` 继续沿用已有布尔设置与默认值 `true`，界面称“完成弹窗与暂停通知”。它控制无声完成卡片及剩余的系统暂停通知；保存为 `false` 清除当前提醒，重新开启不补发先前已消费的完成版本，不增加迁移或新设置字段。
 
 窗口设置包含三个独立布尔字段：
 
