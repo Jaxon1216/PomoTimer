@@ -38,7 +38,7 @@
 
 ## 跨平台发布检查
 
-PR CI 现在分别运行 macOS ARM64、macOS Intel x64 和 Windows x64。三个目标都构建最终安装包；macOS 从 DMG 复制安装，Windows 将最终 NSIS EXE 实际静默安装到含空格的临时目录，运行增强 smoke 后由真实卸载器移除应用、注册表项和快捷方式。
+PR CI 现在分别运行 macOS ARM64、macOS Intel x64 和 Windows x64。三个目标都构建最终安装包；macOS 从 DMG 复制安装，Windows 将最终 NSIS EXE 实际静默安装到普通用户的默认目录（含 `Pomodoro Timer` 空格），运行增强 smoke 后由真实卸载器移除应用、注册表项和快捷方式。安装前拒绝已有产品，应用数据使用独立临时目录。
 
 发布 tag 的流程重复上述全部检查，只有三个目标均成功，才上传完整的三个安装包和 `SHA256SUMS`，最后公开预发布 Release。实际运行结果保留在 [CI](https://github.com/Jaxon1216/PomoTimer/actions/workflows/ci.yml) 和 [Release](https://github.com/Jaxon1216/PomoTimer/actions/workflows/release.yml) 的对应提交与 tag 中；本文的本地检查不代替这些跨平台结果。
 

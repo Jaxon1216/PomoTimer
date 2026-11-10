@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, open, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -11,10 +12,16 @@ assert.ok(process.argv.length <= 3, "Usage: node scripts/smoke-windows-installer
 const execFileAsync = promisify(execFile);
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifest = JSON.parse(await readFile(join(root, "apps/desktop/package.json"), "utf8"));
-const { version, build: { productName, nsis } } = manifest;
+const { version, build: { appId, productName, nsis } } = manifest;
 assert.equal(nsis.perMachine, false, "This smoke test installs only for the runner's current user.");
 assert.equal(nsis.createDesktopShortcut, true);
 assert.equal(nsis.createStartMenuShortcut, true);
+// Match electron-builder 25's UUIDv5 app-guid derivation to reject orphaned install keys too.
+const guidBytes = createHash("sha1").update(Buffer.from("50e065bc313411e69bab38c9862bdaf3", "hex")).update(appId).digest().subarray(0, 16);
+guidBytes[6] = (guidBytes[6] & 0x0f) | 0x50;
+guidBytes[8] = (guidBytes[8] & 0x3f) | 0x80;
+const guidHex = guidBytes.toString("hex");
+const appGuid = nsis.guid ?? `${guidHex.slice(0, 8)}-${guidHex.slice(8, 12)}-${guidHex.slice(12, 16)}-${guidHex.slice(16, 20)}-${guidHex.slice(20)}`;
 const installerName = `Pomodot-${version}-windows-x64-setup.exe`;
 const installerPath = resolve(process.argv[2] ?? join(root, "apps/desktop/dist", installerName));
 assert.equal(basename(installerPath), installerName, "Test the exact current-version installer, never an older glob match.");
@@ -29,9 +36,9 @@ try {
 }
 
 const temporary = await realpath(await mkdtemp(join(tmpdir(), "pomodot-nsis-smoke-")));
-const installPath = join(temporary, "Installed Pomodoro Timer");
-const executablePath = join(installPath, `${productName}.exe`);
-const uninstallerPath = join(installPath, `Uninstall ${productName}.exe`);
+let installPath;
+let executablePath;
+let uninstallerPath;
 const controller = new AbortController();
 const interrupt = () => controller.abort(new Error("Windows installer smoke test interrupted."));
 process.once("SIGINT", interrupt);
@@ -51,12 +58,25 @@ async function exists(path) {
   }
 }
 
+function identifyInstalledPaths(registration) {
+  assert.ok(registration.path.startsWith("HKEY_CURRENT_USER\\"), "A per-user install must not require an administrator.");
+  assert.equal(typeof registration.installLocation, "string", "The new installation must register its actual directory.");
+  assert.ok(isAbsolute(registration.installLocation), "The new installation directory must be absolute.");
+  assert.equal(basename(registration.installLocation).toLowerCase(), productName.toLowerCase(), "Only the new product's default directory may be uninstalled.");
+  installPath = registration.installLocation;
+  executablePath = join(installPath, `${productName}.exe`);
+  uninstallerPath = join(installPath, `Uninstall ${productName}.exe`);
+  assert.ok(registration.uninstallString.toLowerCase().startsWith(`"${uninstallerPath.toLowerCase()}"`), "The new registration must identify its own uninstaller.");
+  trackedRegistryPaths = [registration.installRegistryPath];
+}
+
 async function inspectInstallation() {
   // Query known product entries only; the real uninstaller owns all registry and shortcut removal.
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $product = $env:POMODORO_INSTALLER_PRODUCT
+$guid = $env:POMODORO_INSTALLER_GUID
 $shell = New-Object -ComObject WScript.Shell
 $roots = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
   'HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
@@ -92,17 +112,25 @@ $shortcuts = @(foreach ($kind in $shortcutDirectories.Keys) {
     [pscustomobject]@{ kind = $kind; path = $path; exists = [bool]$present; target = $target }
   }
 })
+$defaultInstallPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('Programs\' + $product)
+$defaultInstallExists = Test-Path -LiteralPath $defaultInstallPath
+$knownInstallKeys = @(foreach ($path in @("HKCU:\Software\$guid", "HKCU:\Software\WOW6432Node\$guid",
+    "HKLM:\Software\$guid", "HKLM:\Software\WOW6432Node\$guid")) {
+  [pscustomobject]@{ path = $path; exists = [bool](Test-Path -LiteralPath $path) }
+})
 $tracked = ConvertFrom-Json -InputObject $env:POMODORO_INSTALLER_REGISTRY_PATHS
 $registry = @(foreach ($path in $tracked) {
   [pscustomobject]@{ path = $path; exists = [bool](Test-Path -LiteralPath $path) }
 })
-[pscustomobject]@{ entries = $entries; shortcuts = $shortcuts; registry = $registry } | ConvertTo-Json -Depth 6 -Compress
+[pscustomobject]@{ entries = $entries; shortcuts = $shortcuts; registry = $registry;
+  knownInstallKeys = $knownInstallKeys; defaultInstallPath = $defaultInstallPath;
+  defaultInstallExists = [bool]$defaultInstallExists } | ConvertTo-Json -Depth 6 -Compress
 `;
   const { stdout } = await execFileAsync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
     windowsHide: true,
     timeout: 20_000,
     maxBuffer: 1024 * 1024,
-    env: { ...process.env, POMODORO_INSTALLER_PRODUCT: productName,
+    env: { ...process.env, POMODORO_INSTALLER_PRODUCT: productName, POMODORO_INSTALLER_GUID: appGuid,
       POMODORO_INSTALLER_REGISTRY_PATHS: JSON.stringify(trackedRegistryPaths) },
     encoding: "utf8",
   });
@@ -113,16 +141,18 @@ async function run(file, args, { nsisArguments = false, timeout = 120_000, clean
   if (!cleanup) controller.signal.throwIfAborted();
   if (nsisArguments) {
     assert.ok(!file.includes('"') && args.every((argument) => !argument.includes('"')), "NSIS arguments must not contain extra quotes.");
-    assert.ok(args.at(-1).startsWith("/D=") || args.at(-1).startsWith("_?="), "NSIS installation directory must be the last raw parameter.");
+    const directoryParameter = args.findIndex((argument) => argument.startsWith("/D=") || argument.startsWith("_?="));
+    assert.ok(directoryParameter === -1 || directoryParameter === args.length - 1, "NSIS directory override must be the last raw parameter.");
   }
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(file, args, {
       cwd: root,
-      env: { ...process.env, TEMP: temporary, TMP: temporary, POMODORO_SMOKE_EXECUTABLE: executablePath },
+      env: { ...process.env, TEMP: temporary, TMP: temporary,
+        ...(executablePath ? { POMODORO_SMOKE_EXECUTABLE: executablePath } : {}) },
       stdio: ["ignore", "inherit", "inherit"],
       windowsHide: true,
       windowsVerbatimArguments: nsisArguments,
-      // Quote argv[0] ourselves because NSIS needs literal unquoted /D= and _?= tails.
+      // Quote argv[0] ourselves because NSIS needs a literal unquoted _?= tail.
       ...(nsisArguments ? { argv0: `"${file}"` } : {}),
     });
     let stopped;
@@ -165,19 +195,20 @@ try {
   const baseline = await inspectInstallation();
   assert.deepEqual(baseline.entries, [], "Refusing to replace an existing Pomodoro Timer installation.");
   assert.equal(baseline.shortcuts.some((shortcut) => shortcut.exists), false, "Refusing to overwrite an existing product shortcut.");
+  assert.equal(baseline.defaultInstallExists, false, "Refusing to overwrite an existing unregistered default installation directory.");
+  assert.equal(baseline.knownInstallKeys.some((entry) => entry.exists), false, "Refusing to reuse an existing product installation registry key.");
   installationAttempted = true;
-  // NSIS requires /D= last and unquoted even for paths containing spaces:
-  // https://nsis.sourceforge.io/Docs/Chapter3.html#installerusage
-  await run(installerPath, ["/S", "/currentuser", `/D=${installPath}`], { nsisArguments: true });
-  assert.equal(await exists(executablePath), true, "The final EXE must actually install its application.");
-  assert.equal(await exists(uninstallerPath), true, "The installed application must include its uninstaller.");
+  // Exercise the normal per-user default instead of electron-builder 25's /D parser.
+  await run(installerPath, ["/S", "/currentuser"], { nsisArguments: true });
   const installed = await inspectInstallation();
   assert.equal(installed.entries.length, 1, "The installer must register exactly one product entry.");
   const registration = installed.entries[0];
+  identifyInstalledPaths(registration);
   assert.equal(registration.displayVersion, version);
-  assert.equal(registration.installLocation?.toLowerCase(), installPath.toLowerCase());
-  assert.ok(registration.path.startsWith("HKEY_CURRENT_USER\\"), "A per-user install must not require an administrator.");
-  trackedRegistryPaths = [registration.installRegistryPath];
+  assert.equal(installPath.toLowerCase(), baseline.defaultInstallPath.toLowerCase(), "The installer must use its normal per-user default directory.");
+  assert.ok(installPath.includes(" "), "The actual default install path must exercise spaces.");
+  assert.equal(await exists(executablePath), true, "The final EXE must actually install its application.");
+  assert.equal(await exists(uninstallerPath), true, "The installed application must include its uninstaller.");
   for (const kind of ["desktop", "programs"]) {
     const shortcut = installed.shortcuts.find((entry) => entry.kind === kind);
     assert.equal(shortcut?.exists, true, `The ${kind} shortcut must be created.`);
@@ -185,22 +216,29 @@ try {
   }
   await run(process.execPath, [join(root, "scripts/smoke-packaged.mjs")]);
   evidence = { kind: "windows-installer-smoke", installer: installerName, version,
-    actualSilentInstall: true, installPathWithSpaces: true, currentUserRegistration: true,
+    actualSilentInstall: true, defaultInstallationPath: true, installPathWithSpaces: true, currentUserRegistration: true,
     desktopAndStartMenuShortcuts: true, installedApplicationSmokePassed: true };
 } catch (error) {
   failure = error;
 } finally {
   if (installationAttempted) {
     try {
-      if (await exists(uninstallerPath)) {
+      // Even a failed post-install assertion must locate and run the new product's real uninstaller.
+      if (!uninstallerPath) {
+        const registered = await inspectInstallation();
+        if (registered.entries.length === 1) identifyInstalledPaths(registered.entries[0]);
+      }
+      if (uninstallerPath && await exists(uninstallerPath)) {
         // _?= keeps the uninstaller in this process so exit means registry/shortcut cleanup finished.
+        // https://nsis.sourceforge.io/Docs/Chapter3.html#installerusage
         await run(uninstallerPath, ["/S", "/currentuser", `_?=${installPath}`], { nsisArguments: true, cleanup: true });
       }
       const remaining = await inspectInstallation();
       assert.deepEqual(remaining.entries, [], "The real uninstaller must remove the product registration.");
       assert.equal(remaining.registry.some((entry) => entry.exists), false, "The real uninstaller must remove its installation registry key.");
+      assert.equal(remaining.knownInstallKeys.some((entry) => entry.exists), false, "The real uninstaller must remove all product installation registry keys.");
       assert.equal(remaining.shortcuts.some((entry) => entry.exists), false, "The real uninstaller must remove product shortcuts.");
-      assert.equal(await exists(executablePath), false, "The real uninstaller must remove the installed executable.");
+      if (executablePath) assert.equal(await exists(executablePath), false, "The real uninstaller must remove the installed executable.");
     } catch (error) {
       failure = failure ? new AggregateError([failure, error], "Installer verification and uninstall cleanup failed.") : error;
     }
