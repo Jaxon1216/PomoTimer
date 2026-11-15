@@ -17,12 +17,14 @@ const snapshotSchemaVersion = 4;
 
 // 领域：SQLite / 设置兼容
 // 顺序：旧设置 JSON -> Store 读取校验 -> 完整 Settings -> Main IPC。
-// 作用：仅为旧库缺少的桌面跟随和淡化选项补默认值。
-// 原因：保留用户已保存的置顶选择，且不能让 IPC patch 自动添加未修改字段。
-// 边界：不覆盖显式 false，不接受未知字段或错误类型，不改已发布迁移。
+// 作用：仅为旧库缺少的外观选项和站立休息时长补默认值。
+// 原因：保留显式偏好，缺省站立时长跟随普通休息，且不能让 IPC patch 自动添加字段。
+// 边界：不覆盖显式 false 或 null，不接受未知字段或错误类型，不改已发布迁移。
 const storedSettingsSchema = settingsSchema.extend({
   followWorkspaces: settingsSchema.shape.followWorkspaces.default(true),
   autoFade: settingsSchema.shape.autoFade.default(true),
+  standingShortBreakDurationSeconds: settingsSchema.shape.standingShortBreakDurationSeconds.default(null),
+  standingLongBreakDurationSeconds: settingsSchema.shape.standingLongBreakDurationSeconds.default(null),
 });
 
 function parseCheckpointJson(json: string): unknown {

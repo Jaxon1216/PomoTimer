@@ -474,6 +474,32 @@ select:focus-visible {
   text-align: left;
 }
 
+.standingBreakAction {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.standingBreakAction:hover {
+  border-color: var(--round-color, var(--accent));
+}
+
+.standingBreakAction svg,
+.timerMenu button svg {
+  flex: 0 0 auto;
+}
+
 .timerControls {
   grid-area: controls;
   display: flex;
@@ -572,6 +598,7 @@ select:focus-visible {
   text-align: left;
   cursor: pointer;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .timerMenu button:hover {
@@ -1159,6 +1186,12 @@ input[aria-invalid="true"] {
 
   .weekDay {
     min-width: 0;
+  }
+}
+
+@container timer-window (width < 320px) or (height < 360px) {
+  .standingBreakAction {
+    display: none;
   }
 }
 

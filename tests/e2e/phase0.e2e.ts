@@ -721,6 +721,94 @@ test("shows the final ten seconds of preparation, resets on input, and starts a 
   await app.close();
 });
 
+test("offers standing only before a break starts and preserves manual progress across input, lock and restart", async ({ launchApplication }, testInfo) => {
+  const userData = testInfo.outputPath("standing-user-data");
+  let app = await launchApplication(userData);
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  let window = await app.firstWindow();
+  await expect(window.locator("time")).toHaveText("30:00");
+  await window.evaluate(() => window.pomodoro.command("next"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 35; });
+  await waitForInputSamples(app, 1);
+  await expect(window.locator(".statePill")).toContainText("5 秒后");
+  await assertTimerLayout(window, "vertical");
+  await window.screenshot({ path: testInfo.outputPath("standing-preparation.png") });
+  await resizeContent(app, window, 160, 180);
+  await window.getByRole("button", { name: "更多操作" }).click();
+  const standing = window.getByRole("menuitem", { name: "已站立，开始大站" });
+  await expect(standing).toBeVisible();
+  const menuBox = await window.getByRole("menu").boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(160);
+  await standing.click();
+  await expect(window.getByRole("heading", { name: "大站短休" })).toBeVisible();
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: "running", round: { breakMode: "standing", totalDurationMs: 600_000, hasStarted: true },
+    automation: { activePresenceSource: "none", breakPreparation: null, manualPauseLocked: false },
+  });
+  await assertTimerLayout(window);
+  await window.screenshot({ path: testInfo.outputPath("standing-minimum.png") });
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => { throw new Error("standing input failure"); }; });
+  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).automation.inputMonitoringAvailable).toBe(false);
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).status).toBe("running");
+  await window.getByRole("button", { name: "暂停大站" }).click();
+  const paused = await window.evaluate(() => window.pomodoro.getSnapshot());
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 600; });
+  await waitForInputSamples(app, 1);
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).remainingMs).toBe(paused.remainingMs);
+  await window.getByRole("button", { name: "继续大站" }).click();
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.emit("lock-screen"); });
+  const locked = await window.evaluate(() => window.pomodoro.getSnapshot());
+  expect(locked.status).toBe("auto-paused");
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.emit("unlock-screen"); powerMonitor.getSystemIdleTime = () => 0; });
+  await waitForInputSamples(app, 1);
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).remainingMs).toBe(locked.remainingMs);
+  await app.close();
+  app = await launchApplication(userData);
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  window = await app.firstWindow();
+  await expect(window.getByRole("heading", { name: "大站短休" })).toBeVisible();
+  await waitForInputSamples(app, 1);
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: "auto-paused", remainingMs: locked.remainingMs,
+    round: { breakMode: "standing", hasStarted: true }, automation: { activePresenceSource: "none" },
+  });
+  await window.getByRole("button", { name: "继续大站" }).click();
+  await window.evaluate(async () => { await window.pomodoro.command("next"); await window.pomodoro.command("next"); });
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 40; });
+  await waitForInputSamples(app, 1);
+  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).status).toBe("running");
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  await waitForInputSamples(app, 1);
+  await window.getByRole("button", { name: "更多操作" }).click();
+  await expect(window.getByRole("menuitem", { name: "已站立，开始大站" })).toHaveCount(0);
+  const rejection = await window.evaluate(async () => {
+    try { await window.pomodoro.command("start-standing-break"); return "accepted"; }
+    catch (reason) { return reason instanceof Error ? reason.message : String(reason); }
+  });
+  expect(rejection).not.toBe("accepted");
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).round.breakMode).toBe("active");
+});
+
+test("fits a 180 minute standing long break at the minimum window size", async ({ launchApplication }, testInfo) => {
+  const app = await launchApplication(testInfo.outputPath("standing-long-user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  await expect(window.locator("time")).toHaveText("30:00");
+  await window.evaluate(async () => {
+    await window.pomodoro.updateSettings({ longBreakDurationSeconds: 5400 });
+    for (let index = 0; index < 5; index += 1) await window.pomodoro.command("next");
+  });
+  await window.getByRole("button", { name: "已站立，开始大站", exact: true }).first().click();
+  await window.evaluate(() => window.pomodoro.command("reset"));
+  await expect(window.locator("time")).toHaveText("180:00");
+  await expect(window.getByRole("heading", { name: "大站长休" })).toBeVisible();
+  await resizeContent(app, window, 160, 180);
+  await assertTimerLayout(window);
+  await window.screenshot({ path: testInfo.outputPath("standing-long-minimum.png") });
+});
+
 test("opens settings and statistics at the minimum size and preserves scrollable settings and themes", async ({ launchApplication }, testInfo) => {
   const app = await launchApplication(testInfo.outputPath("user-data"));
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });

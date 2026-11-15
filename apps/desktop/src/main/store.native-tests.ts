@@ -19,7 +19,7 @@ const legacySchema = `
 const initialSnapshot = () => timerSnapshotSchema.parse({
   revision: 0, emittedAt: "2026-10-22T00:00:00.000Z", activeCycleRounds: 3,
   status: "idle", remainingMs: 1_800_000,
-  round: { kind: "focus", cycleNumber: 1, positionInCycle: 1, focusRoundNumber: 1, breakMode: null, totalDurationMs: 1_800_000 },
+  round: { kind: "focus", cycleNumber: 1, positionInCycle: 1, focusRoundNumber: 1, breakMode: null, totalDurationMs: 1_800_000, hasStarted: false },
   automation: { activePresenceSource: "input", inputPresence: "unknown", cameraPresence: "unknown", inputMonitoringAvailable: true, cameraMonitoringAvailable: false, breakPreparation: null, manualPauseLocked: false, pauseReason: "none" },
 });
 
@@ -87,15 +87,57 @@ for (const alwaysOnTop of [false, true]) {
   }));
 }
 
-for (const field of ["followWorkspaces", "autoFade"] as const) {
-  test(`malformed stored ${field} is backed up instead of silently defaulted`, () => withDirectory((directory) => {
+test("old settings fill only missing standing durations without rewriting the saved preferences", () => withDirectory((directory) => {
+  const legacy = new Database(join(directory, "pomodoro.sqlite"));
+  legacy.exec(legacySchema);
+  const previous = Object.fromEntries(Object.entries({ ...defaultSettings, alwaysOnTop: false, followWorkspaces: false, autoFade: false, defaultBreakMode: "desk" })
+    .filter(([key]) => key !== "standingShortBreakDurationSeconds" && key !== "standingLongBreakDurationSeconds"));
+  const previousJson = JSON.stringify(previous);
+  legacy.prepare("INSERT INTO settings VALUES('settings',?,?)").run(previousJson, "2026-10-22T00:00:00.000Z");
+  legacy.close();
+  const store = new SqliteStore(directory);
+  try {
+    assert.deepEqual(store.loadSettings(), { ...previous, standingShortBreakDurationSeconds: null, standingLongBreakDurationSeconds: null });
+    const reader = new Database(join(directory, "pomodoro.sqlite"));
+    try {
+      assert.deepEqual(reader.prepare("SELECT value_json FROM settings WHERE key='settings'").get(), { value_json: previousJson });
+    } finally { reader.close(); }
+  } finally { store.close(); }
+}));
+
+for (const durations of [
+  { standingShortBreakDurationSeconds: null, standingLongBreakDurationSeconds: null },
+  { standingShortBreakDurationSeconds: 600, standingLongBreakDurationSeconds: 1800 },
+  { standingShortBreakDurationSeconds: null, standingLongBreakDurationSeconds: 10800 },
+  { standingShortBreakDurationSeconds: 7200, standingLongBreakDurationSeconds: null },
+]) {
+  test(`round-trips explicit standing durations ${JSON.stringify(durations)} and appearance opt-outs`, () => withDirectory((directory) => {
+    const selected = { ...defaultSettings, ...durations, alwaysOnTop: false, followWorkspaces: false, autoFade: false };
+    const store = new SqliteStore(directory);
+    try { store.saveSettings(selected); } finally { store.close(); }
+    const reopened = new SqliteStore(directory);
+    try { assert.deepEqual(reopened.loadSettings(), selected); } finally { reopened.close(); }
+  }));
+}
+
+for (const [field, value] of [
+  ["followWorkspaces", null],
+  ["autoFade", null],
+  ["standingShortBreakDurationSeconds", 61],
+  ["standingLongBreakDurationSeconds", 10860],
+  ["standingShortBreakDurationSeconds", false],
+  ["standingLongBreakDurationSeconds", "600"],
+] as const) {
+  test(`malformed stored ${field}=${JSON.stringify(value)} is backed up instead of silently defaulted`, () => withDirectory((directory) => {
     const store = new SqliteStore(directory);
     const writer = new Database(join(directory, "pomodoro.sqlite"));
     try {
-      writer.prepare("INSERT INTO settings VALUES('settings',?,?)").run(JSON.stringify({ ...defaultSettings, [field]: null }), "2026-10-22T00:00:00.000Z");
+      const saved = JSON.stringify({ ...defaultSettings, [field]: value });
+      writer.prepare("INSERT INTO settings VALUES('settings',?,?)").run(saved, "2026-10-22T00:00:00.000Z");
       const recovery = captureRecovery(() => store.loadSettings());
       assert.ok(recovery.backupDirectory);
       assert.match(recovery.message, new RegExp(field));
+      assert.deepEqual(writer.prepare("SELECT value_json FROM settings WHERE key='settings'").get(), { value_json: saved });
     } finally { writer.close(); store.close(); }
   }));
 }
@@ -108,6 +150,7 @@ test("upgrades the original four-table schema without changing its checksum or e
   legacy.prepare("INSERT INTO completed_focus_sessions VALUES(?,?,?,?,?,?,?,?,?)").run("legacy-go-session", "2026-10-22T00:30:00.000Z", "2026-10-22", 480, 1, 1, 1800, 1800, "seated");
   const previous = initialSnapshot();
   delete previous.activeCycleRounds; // Version 1 predates the per-cycle round count.
+  delete previous.round.hasStarted;
   previous.automation.inputPresence = "present";
   legacy.prepare("INSERT INTO timer_snapshot VALUES(1,1,0,?,?)").run(JSON.stringify(previous), "2025-01-01T00:00:00.000Z");
   legacy.close();
@@ -208,7 +251,7 @@ test("publishes break preparation without changing or enriching the persisted ch
       const after = database.prepare("SELECT snapshot_json FROM timer_snapshot").get() as { snapshot_json: string };
       assert.deepEqual(after, before);
       assert.doesNotMatch(after.snapshot_json, /breakPreparation|remainingSeconds|countdown|automation/);
-      assert.equal(engine.inputSample(40).remainingMs, 300_000);
+      assert.equal(store.loadSnapshot()?.round.hasStarted, false);
     } finally { database.close(); }
   } finally { store.close(); }
   const reopened = new SqliteStore(directory);
@@ -216,8 +259,85 @@ test("publishes break preparation without changing or enriching the persisted ch
     const restored = new TimerEngine(reopened, { now: () => 0, wallDate: () => new Date(0) });
     assert.equal(restored.snapshot.automation.breakPreparation, null);
     assert.equal(restored.snapshot.remainingMs, 300_000);
+    assert.equal(restored.snapshot.round.hasStarted, false);
+    assert.equal(restored.command("start-standing-break").round.breakMode, "standing");
   } finally { reopened.close(); }
 }));
+
+for (const kind of ["short-break", "long-break"] as const) {
+  for (const paused of [false, true]) {
+    test(`restores a ${paused ? "paused" : "running"} standing ${kind} with frozen progress and explicit confirmation`, () => withDirectory((directory) => {
+      const store = new SqliteStore(directory);
+      let now = 0;
+      const remaining = kind === "short-break" ? 595_000 : 1_795_000;
+      try {
+        store.saveSettings({ ...defaultSettings, focusRoundsPerCycle: kind === "long-break" ? 1 : 3, standingShortBreakDurationSeconds: 600, standingLongBreakDurationSeconds: 1800 });
+        const engine = new TimerEngine(store, { now: () => now, wallDate: () => new Date(0) });
+        assert.equal(engine.command("next").round.kind, kind);
+        assert.equal(engine.inputSample(35).automation.breakPreparation?.countdown, true);
+        assert.equal(engine.command("start-standing-break").status, "running");
+        now = 5_000;
+        if (paused) assert.equal(engine.command("pause").status, "auto-paused");
+        assert.equal(engine.inputSample(0).status, paused ? "auto-paused" : "running");
+        assert.equal(engine.cameraSample("present").status, paused ? "auto-paused" : "running");
+        assert.equal(store.loadSnapshot()?.round.hasStarted, true);
+        assert.equal(store.loadSnapshot()?.remainingMs, remaining);
+      } finally { store.close(); }
+      const database = new Database(join(directory, "pomodoro.sqlite"));
+      try {
+        const row = database.prepare("SELECT snapshot_json FROM timer_snapshot").get() as { snapshot_json: string };
+        assert.deepEqual(Object.keys(JSON.parse(row.snapshot_json) as Record<string, unknown>).sort(), ["activeCycleRounds", "emittedAt", "remainingMs", "revision", "round", "status"]);
+        assert.doesNotMatch(row.snapshot_json, /automation|presence|Presence|generation|breakPreparation|standing-confirmation/);
+      } finally { database.close(); }
+      now = 86_400_000;
+      const reopened = new SqliteStore(directory);
+      try {
+        const restored = new TimerEngine(reopened, { now: () => now, wallDate: () => new Date(now) });
+        assert.equal(restored.snapshot.status, "auto-paused");
+        assert.equal(restored.snapshot.round.kind, kind);
+        assert.equal(restored.snapshot.round.breakMode, "standing");
+        assert.equal(restored.snapshot.round.hasStarted, true);
+        assert.equal(restored.snapshot.remainingMs, remaining);
+        assert.equal(restored.snapshot.automation.activePresenceSource, "none");
+        assert.equal(restored.snapshot.automation.inputPresence, "unknown");
+        assert.equal(restored.snapshot.automation.cameraPresence, "unknown");
+        assert.equal(restored.snapshot.automation.manualPauseLocked, false);
+        assert.equal(restored.inputSample(40).status, "auto-paused");
+        assert.equal(restored.cameraSample("away").status, "auto-paused");
+        now += 20_000;
+        assert.equal(restored.snapshot.remainingMs, remaining);
+        assert.equal(restored.command("resume").status, "running");
+        now += 1_000;
+        assert.equal(restored.snapshot.remainingMs, remaining - 1_000);
+      } finally { reopened.close(); }
+    }));
+  }
+}
+
+for (const defaultBreakMode of ["active", "desk"] as const) {
+  test(`keeps a started ${defaultBreakMode} break ineligible for standing after reopening the database`, () => withDirectory((directory) => {
+    const store = new SqliteStore(directory);
+    let now = 0;
+    try {
+      store.saveSettings({ ...defaultSettings, defaultBreakMode });
+      const engine = new TimerEngine(store, { now: () => now, wallDate: () => new Date(0) });
+      engine.command("next");
+      assert.equal(engine.command("start").round.hasStarted, true);
+      now = 5_000;
+      assert.equal(engine.command("pause").remainingMs, 295_000);
+    } finally { store.close(); }
+    now = 86_400_000;
+    const reopened = new SqliteStore(directory);
+    try {
+      const restored = new TimerEngine(reopened, { now: () => now, wallDate: () => new Date(now) });
+      assert.equal(restored.snapshot.round.hasStarted, true);
+      assert.equal(restored.snapshot.remainingMs, 295_000);
+      assert.throws(() => restored.command("start-standing-break"));
+      assert.equal(restored.snapshot.round.breakMode, defaultBreakMode);
+      assert.equal(restored.snapshot.remainingMs, 295_000);
+    } finally { reopened.close(); }
+  }));
+}
 
 for (const kind of ["focus", "input-break", "camera-break"] as const) {
   test(`normalizes a legacy manually paused ${kind} while preserving the focus-only manual lock`, () => withDirectory((directory) => {
@@ -226,6 +346,7 @@ for (const kind of ["focus", "input-break", "camera-break"] as const) {
     legacy.prepare("INSERT INTO schema_migrations VALUES(?,?,?)").run(3, "electron-sqlite-v3-timer-state", "2026-10-22T00:00:00.000Z");
     const previous = initialSnapshot();
     previous.status = "manual-paused";
+    delete previous.round.hasStarted;
     previous.automation.manualPauseLocked = true;
     delete previous.automation.breakPreparation;
     if (kind !== "focus") {
@@ -240,7 +361,9 @@ for (const kind of ["focus", "input-break", "camera-break"] as const) {
       const engine = new TimerEngine(store, { now: () => 0, wallDate: () => new Date(0) });
       assert.equal(engine.snapshot.status, kind === "focus" ? "manual-paused" : "auto-paused");
       assert.equal(engine.snapshot.automation.manualPauseLocked, kind === "focus");
+      assert.equal(engine.snapshot.round.hasStarted, true);
       assert.equal(engine.snapshot.automation.breakPreparation, null);
+      assert.throws(() => engine.command("start-standing-break"));
       if (kind === "focus") assert.equal(engine.inputSample(0).status, "manual-paused");
       else {
         if (kind === "camera-break") {
@@ -267,6 +390,7 @@ test("retries WAL cleanup on reopening a migrated checkpoint after a reader rele
     reader.exec(legacySchema);
     const oldSnapshot = initialSnapshot();
     oldSnapshot.status = "manual-paused";
+    delete oldSnapshot.round.hasStarted;
     oldSnapshot.automation.manualPauseLocked = true;
     oldSnapshot.automation.inputPresence = "away";
     reader.prepare("INSERT INTO timer_snapshot VALUES(1,3,0,?,?)").run(JSON.stringify(oldSnapshot), oldSnapshot.emittedAt);

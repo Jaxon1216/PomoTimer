@@ -7,6 +7,7 @@ import {
   Moon,
   MoreHorizontal,
   Pause,
+  PersonStanding,
   Play,
   RotateCcw,
   Settings as SettingsIcon,
@@ -38,11 +39,19 @@ const labels = {
   "long-break": "长休",
 } as const;
 
+function roundLabel(round: TimerSnapshot["round"]): string {
+  return `${round.breakMode === "standing" ? "大站" : ""}${labels[round.kind]}`;
+}
+
 function statusText(snapshot: TimerSnapshot, settings: Settings): string {
+  const standing = snapshot.round.breakMode === "standing";
+  if (standing && snapshot.status === "running") return "大站休息中";
+  if (standing && snapshot.status === "idle") return "已站立 · 点击开始";
+  if (standing && snapshot.automation.pauseReason === "standing-confirmation") return "大站暂停 · 点击继续";
   if (snapshot.status === "running") return snapshot.round.kind === "focus" ? "专注中" : "休息中";
   const isFocus = snapshot.round.kind === "focus";
   if (isFocus && snapshot.automation.manualPauseLocked) return "手动暂停 · 点击继续";
-  const waitingBreak = !isFocus && (snapshot.status === "idle" || snapshot.status === "manual-paused"
+  const waitingBreak = !isFocus && !standing && (snapshot.status === "idle" || snapshot.status === "manual-paused"
     || snapshot.automation.pauseReason === "break-condition");
   if (waitingBreak) {
     const action = snapshot.remainingMs === snapshot.round.totalDurationMs ? "开始" : "继续";
@@ -118,6 +127,12 @@ function primaryCommand(snapshot: TimerSnapshot): {
   label: string;
   icon: ReactElement;
 } {
+  if (snapshot.round.breakMode === "standing") {
+    if (snapshot.status === "running") return { command: "pause", label: "暂停大站", icon: <Pause size={16} /> };
+    return snapshot.status === "idle"
+      ? { command: "start", label: "开始大站", icon: <Play size={16} /> }
+      : { command: "resume", label: "继续大站", icon: <Play size={16} /> };
+  }
   if (snapshot.status === "running") {
     return { command: "pause", label: "暂停计时", icon: <Pause size={16} /> };
   }
@@ -157,7 +172,17 @@ function TimerView({
   const remaining = formatDuration(snapshot.remainingMs);
   const circumference = 2 * Math.PI * 108;
   const currentStatus = statusText(snapshot, settings);
-  const monitorStatus = snapshot.automation.activePresenceSource === "camera"
+  const standing = snapshot.round.breakMode === "standing";
+  const currentRoundLabel = roundLabel(snapshot.round);
+  const canStartStanding = snapshot.round.kind !== "focus" && !standing && snapshot.round.hasStarted === false
+    && (snapshot.status === "idle" || snapshot.status === "auto-paused")
+    && snapshot.automation.pauseReason !== "system-lock" && snapshot.automation.pauseReason !== "storage-unavailable";
+  const standingSeconds = snapshot.round.kind === "long-break"
+    ? settings.standingLongBreakDurationSeconds ?? settings.longBreakDurationSeconds * 2
+    : settings.standingShortBreakDurationSeconds ?? settings.shortBreakDurationSeconds * 2;
+  const standingTitle = `已确认站立，开始 ${Number((standingSeconds / 60).toFixed(2))} 分钟大站休息；本轮由你手动控制，感知不参与计时。`;
+  const monitorStatus = standing ? "手动计时 · 感知不参与"
+    : snapshot.automation.activePresenceSource === "camera"
     ? snapshot.automation.cameraMonitoringAvailable
       ? `监控感知 · ${snapshot.automation.cameraPresence === "present" ? "在场" : snapshot.automation.cameraPresence === "away" ? "离开" : "待检测"}`
       : "监控感知 · 正在启动摄像头"
@@ -170,12 +195,13 @@ function TimerView({
   const focusRoundNumber = snapshot.round.focusRoundNumber ?? Math.ceil(snapshot.round.positionInCycle / 2);
   const roundCount = snapshot.round.kind === "focus" ? `第 ${focusRoundNumber}/${rounds} 轮专注`
     : `第 ${snapshot.round.kind === "long-break" ? rounds : focusRoundNumber} 轮后的${labels[snapshot.round.kind]}`;
-  const sequence = Array.from({ length: rounds * 2 }, (_, index): { kind: TimerSnapshot["round"]["kind"]; seconds: number; description: string } => {
+  const sequence = Array.from({ length: rounds * 2 }, (_, index): { kind: TimerSnapshot["round"]["kind"]; seconds: number; label: string; description: string } => {
     const kind = index % 2 === 0 ? "focus" : index === rounds * 2 - 1 ? "long-break" : "short-break";
     const plannedSeconds = kind === "focus" ? settings.focusDurationSeconds
       : kind === "short-break" ? settings.shortBreakDurationSeconds : settings.longBreakDurationSeconds;
     const seconds = index === snapshot.round.positionInCycle - 1 ? snapshot.round.totalDurationMs / 1000 : plannedSeconds;
-    return { kind, seconds, description: `${labels[kind]} ${Number((seconds / 60).toFixed(2))} 分钟` };
+    const label = index === snapshot.round.positionInCycle - 1 ? currentRoundLabel : labels[kind];
+    return { kind, seconds, label, description: `${label} ${Number((seconds / 60).toFixed(2))} 分钟` };
   });
 
   useEffect(() => {
@@ -235,7 +261,9 @@ function TimerView({
         <div className="titleActions">
           <IconButton className="presenceModeButton" disabled={modeChanging}
             label={`感知模式：${settings.focusPresenceSource === "input" ? "触控" : "监控"}，切换为${settings.focusPresenceSource === "input" ? "监控" : "触控"}`}
-            title={settings.focusPresenceSource === "input"
+            title={standing
+              ? `已选择${settings.focusPresenceSource === "input" ? "触控" : "监控"}感知，适用于后续轮次；本轮大站由你手动控制，摄像头已关闭。点击切换后续感知方式。`
+              : settings.focusPresenceSource === "input"
               ? "当前：触控感知。使用系统输入（键盘、鼠标、触控板）；点击切换为监控感知。"
               : "当前：监控感知。专注和活动休息使用摄像头，桌前休息使用系统输入；影像仅在本机处理，不保存或上传。点击切换为触控感知。"}
             onClick={() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input")}>
@@ -252,9 +280,11 @@ function TimerView({
             </button>
             {menuOpen && (
               <div className="timerMenu" id="timer-menu" role="menu" aria-label="计时器操作" onKeyDown={navigateMenu}>
+                {canStartStanding && <button type="button" role="menuitem" title={standingTitle}
+                  onClick={() => menuAction(() => onCommand("start-standing-break"))}><PersonStanding size={15} />已站立，开始大站</button>}
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("stats"))}><BarChart3 size={15} />打开统计</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("settings"))}><SettingsIcon size={15} />打开设置</button>
-                <button type="button" role="menuitem" disabled={modeChanging} onClick={() => menuAction(() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input"))}><Camera size={15} />{settings.focusPresenceSource === "input" ? "切换为监控感知" : "切换为触控感知"}</button>
+                <button type="button" role="menuitem" disabled={modeChanging} title={standing ? "感知选择适用于后续轮次，不影响当前大站计时。" : undefined} onClick={() => menuAction(() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input"))}><Camera size={15} />{settings.focusPresenceSource === "input" ? "切换为监控感知" : "切换为触控感知"}</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onCommand("reset"))}><RotateCcw size={15} />重新开始当前轮次</button>
               </div>
             )}
@@ -265,21 +295,23 @@ function TimerView({
       <section className="timerStage" aria-labelledby="round-title">
         <div className="timerDetails">
           <div className="roundMeta">
-            <h1 id="round-title">{labels[snapshot.round.kind]}</h1>
-            {snapshot.round.kind !== "focus" && <span className="breakMode">{snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}</span>}
+            <h1 id="round-title">{currentRoundLabel}</h1>
+            {snapshot.round.kind !== "focus" && !standing && <span className="breakMode">{snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}</span>}
           </div>
           <div className="timerStatus" aria-live="polite">
             <div className={`statePill state-${snapshot.status}`} title={currentStatus}>
               <span className="stateDot" aria-hidden="true" />
               <span>{currentStatus}</span>
             </div>
-            <p className="monitorStatus" data-available={snapshot.automation.activePresenceSource === "camera" ? snapshot.automation.cameraMonitoringAvailable : snapshot.automation.inputMonitoringAvailable}>{monitorStatus}</p>
+            <p className="monitorStatus" data-available={standing || (snapshot.automation.activePresenceSource === "camera" ? snapshot.automation.cameraMonitoringAvailable : snapshot.automation.inputMonitoringAvailable)}>{monitorStatus}</p>
+            {canStartStanding && <button type="button" className="standingBreakAction" title={standingTitle}
+              onClick={() => onCommand("start-standing-break")}><PersonStanding size={14} />已站立，开始大站</button>}
           </div>
         </div>
         <div className="dialSlot">
           <div
             className="timerDial"
-            aria-label={`${labels[snapshot.round.kind]}，剩余 ${formatDuration(snapshot.remainingMs)}，${currentStatus}`}
+            aria-label={`${currentRoundLabel}，剩余 ${formatDuration(snapshot.remainingMs)}，${currentStatus}`}
           >
             <svg viewBox="0 0 230 230" aria-hidden="true">
               <circle className="dialTrack" cx="115" cy="115" r="108" />
@@ -315,7 +347,7 @@ function TimerView({
       <footer className="timerFooter">
         <div className="roundSequence" role="img" aria-label={`第 ${snapshot.round.positionInCycle} / ${rounds * 2} 阶段；${sequence.map((stage) => stage.description).join(" → ")}`}>
           {sequence.map((stage, index) => (
-            <span key={index} style={{ flexGrow: stage.seconds }} title={`第 ${index + 1} 阶段 · ${labels[stage.kind]} · ${Number((stage.seconds / 60).toFixed(2))} 分钟`}
+            <span key={index} style={{ flexGrow: stage.seconds }} title={`第 ${index + 1} 阶段 · ${stage.label} · ${Number((stage.seconds / 60).toFixed(2))} 分钟`}
               className={index === snapshot.round.positionInCycle - 1 ? "current" : index < snapshot.round.positionInCycle - 1 ? "finished" : ""} />
           ))}
         </div>
@@ -329,12 +361,21 @@ const numericSettings = {
   focusDurationSeconds: { label: "专注时长", min: 5, max: 120, scale: 60, hint: "分钟 · 下一轮生效" },
   shortBreakDurationSeconds: { label: "短休时长", min: 1, max: 60, scale: 60, hint: "分钟 · 下一轮生效" },
   longBreakDurationSeconds: { label: "长休时长", min: 1, max: 90, scale: 60, hint: "分钟 · 下一轮生效" },
+  standingShortBreakDurationSeconds: { label: "大站短休时长", min: 1, max: 120, scale: 60, hint: "分钟 · 留空跟随短休两倍；下次开始大站时生效" },
+  standingLongBreakDurationSeconds: { label: "大站长休时长", min: 1, max: 180, scale: 60, hint: "分钟 · 留空跟随长休两倍；下次开始大站时生效" },
   inputIdleThresholdSeconds: { label: "输入闲置阈值", min: 10, max: 600, scale: 1, hint: "秒 · 下次输入样本生效" },
 } as const;
 type NumericSetting = keyof typeof numericSettings;
 const numericSettingKeys = Object.keys(numericSettings) as NumericSetting[];
+function optionalNumber(key: NumericSetting): boolean {
+  return key === "standingShortBreakDurationSeconds" || key === "standingLongBreakDurationSeconds";
+}
+
 function settingsNumbers(settings: Settings): Record<NumericSetting, string> {
-  return Object.fromEntries(numericSettingKeys.map((key) => [key, String(settings[key] / numericSettings[key].scale)])) as Record<NumericSetting, string>;
+  return Object.fromEntries(numericSettingKeys.map((key) => {
+    const value = settings[key];
+    return [key, value === null ? "" : String(value / numericSettings[key].scale)];
+  })) as Record<NumericSetting, string>;
 }
 
 function SettingsView({
@@ -377,9 +418,11 @@ function SettingsView({
   };
   const errors = Object.fromEntries(numericSettingKeys.map((key) => {
     const { min, max } = numericSettings[key];
+    const empty = numbers[key].trim() === "";
+    if (empty && optionalNumber(key)) return [key, null];
     const value = Number(numbers[key]);
-    return [key, numbers[key].trim() === "" || !Number.isInteger(value) || value < min || value > max
-      ? `请输入 ${min}–${max} 之间的整数` : null];
+    return [key, empty || !Number.isInteger(value) || value < min || value > max
+      ? `请输入 ${min}–${max} 之间的整数${optionalNumber(key) ? "，或留空跟随两倍时长" : ""}` : null];
   })) as Record<NumericSetting, string | null>;
 
   const save = async () => {
@@ -392,6 +435,8 @@ function SettingsView({
         focusDurationSeconds: Number(numbers.focusDurationSeconds) * 60,
         shortBreakDurationSeconds: Number(numbers.shortBreakDurationSeconds) * 60,
         longBreakDurationSeconds: Number(numbers.longBreakDurationSeconds) * 60,
+        standingShortBreakDurationSeconds: numbers.standingShortBreakDurationSeconds.trim() === "" ? null : Number(numbers.standingShortBreakDurationSeconds) * 60,
+        standingLongBreakDurationSeconds: numbers.standingLongBreakDurationSeconds.trim() === "" ? null : Number(numbers.standingLongBreakDurationSeconds) * 60,
         focusRoundsPerCycle: draft.focusRoundsPerCycle,
         inputIdleThresholdSeconds: Number(numbers.inputIdleThresholdSeconds),
         defaultBreakMode: draft.defaultBreakMode,
@@ -413,10 +458,14 @@ function SettingsView({
 
   const numberInput = (key: NumericSetting) => {
     const { label, min, max, hint } = numericSettings[key];
+    const ordinaryMinutes = key === "standingShortBreakDurationSeconds" ? Number(numbers.shortBreakDurationSeconds)
+      : key === "standingLongBreakDurationSeconds" ? Number(numbers.longBreakDurationSeconds) : undefined;
+    const placeholder = ordinaryMinutes !== undefined && Number.isFinite(ordinaryMinutes) && ordinaryMinutes > 0
+      ? String(ordinaryMinutes * 2) : undefined;
     return (
       <label key={key} className={key === "inputIdleThresholdSeconds" ? "wideSetting" : undefined}>
         {label}
-        <input type="number" aria-label={label} min={min} max={max} step="1" value={numbers[key]}
+        <input type="number" aria-label={label} min={min} max={max} step="1" value={numbers[key]} placeholder={placeholder}
           aria-invalid={Boolean(errors[key])} aria-describedby={`${key}-hint${errors[key] ? ` ${key}-error` : ""}`}
           disabled={saving} onChange={(event) => setNumber(key, event.target.value)} />
         <small id={`${key}-hint`}>{hint}</small>
@@ -440,6 +489,7 @@ function SettingsView({
         <fieldset className="settingsFields" disabled={saving}>
           <section className="settingsSection">
             <h2>节奏</h2>
+            <p className="infoNote">大站 · 站立休息：站起来，手上的事可以继续。准备期手动选择，本轮输入或监控不打断。</p>
             <div className="settingGrid">
               {numericSettingKeys.filter((key) => key !== "inputIdleThresholdSeconds").map(numberInput)}
               <label>
@@ -466,7 +516,7 @@ function SettingsView({
               <button type="button" disabled={modeChanging} aria-pressed={settings.focusPresenceSource === "input"} onClick={() => onModeChange("input")}>触控</button>
               <button type="button" disabled={modeChanging} aria-pressed={settings.focusPresenceSource === "camera"} onClick={() => onModeChange("camera")}>监控</button>
             </div>
-            <p className="infoNote">立即生效。监控会请求摄像头权限：专注在场计时，活动休息离席计时；桌前休息根据系统输入计时。画面只在本机处理，不保存或上传。切回触控会关闭摄像头。</p>
+            <p className="infoNote">感知选择立即保存。监控启用时会请求摄像头权限：专注在场计时，活动休息离席计时；桌前休息根据系统输入计时。大站休息由你手动控制并关闭摄像头，感知选择用于后续轮次。画面只在本机处理，不保存或上传。切回触控会关闭摄像头。</p>
             {numberInput("inputIdleThresholdSeconds")}
             <div className="segmented">
               <span>默认休息模式</span>

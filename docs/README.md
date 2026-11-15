@@ -16,7 +16,7 @@
 | 本地摄像头感知做了哪些验证？ | [摄像头开发验证](./camera-presence-validation.md)记录自动化、打包检查和真机边界。 |
 | 自动休息、空格和模式按钮这轮改了什么？ | [交互对齐记录](./sensing-interaction-design.md)与[修订验证](./sensing-interaction-validation.md)记录已确认规则和交付检查。 |
 | 置顶、桌面跟随和交互淡化如何区分？ | [桌面挂件设计](./desktop-widget-design.md)记录已确认规则和 macOS 方案取舍；[验证记录](./desktop-widget-validation.md)区分当前自动化结果与待执行的实机检查。 |
-| 大站与监控／触控有什么关系，名字从哪里来？ | [大站设计访谈](./standing-break-design.md)记录待确认的入口与计时规则；[传播调研](./standing-break-research.md)区分公开线索、分析和文案建议。功能尚未实现。 |
+| 大站与监控／触控有什么关系，名字从哪里来？ | [大站设计](./standing-break-design.md)说明准备期的本轮手动选择；[验证记录](./standing-break-validation.md)区分自动化与实机结果；[传播调研](./standing-break-research.md)区分公开线索、分析和文案建议。 |
 | 字体和视觉参考从哪里来？ | [第三方声明](./third-party-notices.md)说明素材来源。 |
 
 固定原则：本地离线、macOS/Windows 首发、默认 `30/5/30/5/30/10`、输入只传递闲置秒数、不记录敏感输入或相机内容、完成专注才统计、失败检测不伪造可靠 presence。
@@ -32,6 +32,9 @@
 | [休息准备倒数](./assets/screenshots/break-preparation.png) | 无输入达到第 35 秒，提示 5 秒后开始，正式休息仍为完整 5 分钟。 |
 | [拖小窗口](./assets/screenshots/long-break-waiting-compact.png) | 220×240 小窗等待开始 10 分钟活动休息，测试的闲置阈值为 600 秒。 |
 | [最小窗口](./assets/screenshots/drag-minimum-interrupted-break.png) | 在 160×180 的窗口中，短休因输入暂停，可直接点击圆形播放按钮继续。 |
+| [大站准备入口](./assets/screenshots/standing-preparation.png) | 本轮开发构建：默认准备期还剩 5 秒时，可手动选择大站，正式休息仍未开始。 |
+| [大站最小窗口](./assets/screenshots/standing-minimum.png) | 本轮开发构建：160×180 中显示大站短休，键鼠输入不控制倒计时。 |
+| [大站最长时长](./assets/screenshots/standing-long-minimum.png) | 本轮开发构建：160×180 中完整显示 180:00，重置后等待手动开始。 |
 | [设置](./assets/screenshots/settings-dark.png) | 切换到深色主题，开启常驻顶部。 |
 | [统计](./assets/screenshots/stats-dark.png) | 独立测试数据中还没有完成的专注轮。 |
 

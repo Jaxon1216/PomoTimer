@@ -8,9 +8,13 @@ export const presenceSchema = z.enum(["present", "away", "unknown"]);
 export type Presence = z.infer<typeof presenceSchema>;
 export const presenceSourceSchema = z.enum(["input", "camera"]);
 export type PresenceSource = z.infer<typeof presenceSourceSchema>;
+export const activePresenceSourceSchema = z.enum(["input", "camera", "none"]);
+export type ActivePresenceSource = z.infer<typeof activePresenceSourceSchema>;
 export const breakModeSchema = z.enum(["active", "desk"]);
 export type BreakMode = z.infer<typeof breakModeSchema>;
-export const pauseReasonSchema = z.enum(["none", "input-away", "camera-away", "break-condition", "system-suspend", "system-lock", "core-recovery", "source-unavailable", "storage-unavailable"]);
+export const roundBreakModeSchema = z.enum(["active", "desk", "standing"]);
+export type RoundBreakMode = z.infer<typeof roundBreakModeSchema>;
+export const pauseReasonSchema = z.enum(["none", "input-away", "camera-away", "break-condition", "standing-confirmation", "system-suspend", "system-lock", "core-recovery", "source-unavailable", "storage-unavailable"]);
 export type PauseReason = z.infer<typeof pauseReasonSchema>;
 
 export const roundSchema = z.object({
@@ -18,9 +22,14 @@ export const roundSchema = z.object({
   cycleNumber: z.number().int().min(1),
   positionInCycle: z.number().int().min(1),
   focusRoundNumber: z.number().int().min(1).nullable(),
-  breakMode: breakModeSchema.nullable(),
+  breakMode: roundBreakModeSchema.nullable(),
   totalDurationMs: z.number().int().positive(),
-}).strict();
+  hasStarted: z.boolean().optional(),
+}).strict().superRefine((round, context) => {
+  if (round.kind === "focus" && round.breakMode === "standing") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["breakMode"], message: "大站仅适用于休息轮" });
+  }
+});
 export type Round = z.infer<typeof roundSchema>;
 
 export const breakPreparationSchema = z.object({
@@ -30,7 +39,7 @@ export const breakPreparationSchema = z.object({
 export type BreakPreparation = z.infer<typeof breakPreparationSchema>;
 
 export const automationStateSchema = z.object({
-  activePresenceSource: presenceSourceSchema,
+  activePresenceSource: activePresenceSourceSchema,
   inputPresence: presenceSchema,
   cameraPresence: presenceSchema,
   inputMonitoringAvailable: z.boolean(),
@@ -67,6 +76,8 @@ export const settingsSchema = z.object({
   focusDurationSeconds: z.number().int().min(300).max(7200),
   shortBreakDurationSeconds: z.number().int().min(60).max(3600),
   longBreakDurationSeconds: z.number().int().min(60).max(5400),
+  standingShortBreakDurationSeconds: z.number().int().min(60).max(7200).multipleOf(60).nullable(),
+  standingLongBreakDurationSeconds: z.number().int().min(60).max(10800).multipleOf(60).nullable(),
   focusRoundsPerCycle: z.number().int().min(1).max(8),
   inputIdleThresholdSeconds: z.number().int().min(10).max(600),
   focusPresenceSource: presenceSourceSchema,
@@ -93,7 +104,7 @@ export type StatisticsSnapshot = z.infer<typeof statisticsSnapshotSchema>;
 
 export const capabilitiesSchema = z.object({ inputMonitoring: z.boolean(), cameraPresence: z.boolean(), standingFocus: z.literal(false) }).strict();
 export type Capabilities = z.infer<typeof capabilitiesSchema>;
-export const timerCommandSchema = z.enum(["start", "pause", "resume", "next", "reset"]);
+export const timerCommandSchema = z.enum(["start", "pause", "resume", "next", "reset", "start-standing-break"]);
 export type TimerCommand = z.infer<typeof timerCommandSchema>;
 // 领域：Electron / 摄像头会话契约
 // 顺序：Main 会话更新 -> Preload -> Renderer 检测 -> 带代次的 presence 回报。

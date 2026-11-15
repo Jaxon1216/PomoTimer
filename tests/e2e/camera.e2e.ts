@@ -279,3 +279,50 @@ test("starts camera focus and active rest automatically while desk rest keeps th
   await application.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 40; });
   await expect.poll(async () => (await snapshot(cameraWindow)).status).toBe("running");
 });
+
+test("releases the camera during standing, keeps its preference through reload, and renews it on natural completion", async ({ application, cameraWindow }) => {
+  await probeCamera(cameraWindow, "real");
+  await cameraWindow.getByRole("button", { name: "感知模式：触控，切换为监控" }).click();
+  await expect.poll(() => cameraWindow.evaluate(() =>
+    (Reflect.get(window, "cameraTestProbe") as CameraProbe).streams.length,
+  )).toBeGreaterThan(0);
+  const original = await cameraState(cameraWindow);
+  expect(original.enabled).toBe(true);
+  const started = await cameraWindow.evaluate(async () => {
+    await window.pomodoro.command("next");
+    return window.pomodoro.command("start-standing-break");
+  });
+  expect(started).toMatchObject({ status: "running", round: { breakMode: "standing" }, automation: { activePresenceSource: "none" } });
+  await expect.poll(() => cameraWindow.evaluate(() =>
+    (Reflect.get(window, "cameraTestProbe") as CameraProbe).streams.flatMap((stream) => stream.getTracks().map((track) => track.readyState)),
+  )).toEqual(["ended"]);
+  expect(await cameraState(cameraWindow)).toMatchObject({ enabled: false });
+  const rejectedUnknown = await cameraWindow.evaluate(async (generation) => {
+    try { await window.pomodoro.reportCameraPresence("unknown", generation); return "accepted"; }
+    catch (reason) { return reason instanceof Error ? reason.message : String(reason); }
+  }, original.generation);
+  expect(rejectedUnknown).toContain("会话已失效");
+  await application.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 6_000)));
+  expect((await cameraWindow.evaluate(() => window.pomodoro.getSettings())).focusPresenceSource).toBe("camera");
+  expect((await snapshot(cameraWindow)).status).toBe("running");
+  await cameraWindow.reload();
+  await expect(cameraWindow.getByRole("heading", { name: "大站短休" })).toBeVisible();
+  expect(await cameraState(cameraWindow)).toMatchObject({ enabled: false });
+  expect(await cameraWindow.evaluate(() => (Reflect.get(window, "cameraTestProbe") as CameraProbe).requests)).toBe(0);
+  expect((await cameraWindow.evaluate(() => window.pomodoro.getSettings())).focusPresenceSource).toBe("camera");
+  const statisticsBefore = await cameraWindow.evaluate(() => window.pomodoro.getStatistics());
+  const remaining = (await snapshot(cameraWindow)).remainingMs;
+  // Advance only this isolated Main's monotonic clock, exercising the real
+  // completion/broadcast path without waiting ten minutes in an integration test.
+  await application.evaluate((_electron, remaining) => {
+    const originalNow = performance.now.bind(performance);
+    Object.defineProperty(performance, "now", { configurable: true, value: () => originalNow() + remaining + 1 });
+  }, remaining);
+  await expect.poll(async () => (await snapshot(cameraWindow)).round.kind).toBe("focus");
+  const renewed = await cameraState(cameraWindow);
+  expect(renewed.enabled).toBe(true);
+  expect(renewed.generation).toBeGreaterThan(original.generation);
+  expect(await rejectedReport(cameraWindow, original.generation)).toContain("会话已失效");
+  expect((await cameraWindow.evaluate(() => window.pomodoro.getStatistics())).today).toEqual(statisticsBefore.today);
+  expect((await report(cameraWindow, "present", renewed.generation)).status).toBe("running");
+});

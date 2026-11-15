@@ -82,13 +82,21 @@ const capabilities = capabilitiesSchema.parse({ inputMonitoring: process.platfor
 function assertSender(event: IpcMainInvokeEvent): void { if (event.sender.id !== mainWindow?.webContents.id || event.senderFrame !== event.sender.mainFrame) throw new Error("不支持的 IPC 调用来源"); }
 function currentEngine(): TimerEngine { if (!engine) throw new Error("计时核心尚未初始化"); return engine; }
 function rendererUrl(): string { return new URL(process.env["ELECTRON_RENDERER_URL"] ?? pathToFileURL(join(__dirname, "../renderer/index.html")).toString()).href; }
-function syncCamera(): void {
+// 领域：Electron / 大站摄像头生命周期
+// 顺序：计时命令或自然切轮 -> publishSnapshot -> syncCamera -> camera.state。
+// 作用：按当前轮次启停检测，大站临时释放摄像头且保留用户的感知偏好。
+// 原因：大站由手动声明计时，旧检测和超时不能改变该轮或下一轮的设置。
+// 边界：只更新检测会话并返回最新快照，不递归发布计时事件。
+function syncCamera(snapshot: TimerSnapshot): TimerSnapshot {
   const enabled = capabilities.cameraPresence && currentEngine().settings.focusPresenceSource === "camera"
+    && snapshot.round.breakMode !== "standing"
     && rendererReady && !suspended && !screenLocked && !runtimeFailure && !quitting;
   if (camera.setEnabled(enabled, performance.now())) {
-    publishSnapshot(currentEngine().cameraSample("unknown"));
+    const synchronized = currentEngine().cameraSample("unknown");
     broadcast({ type: "camera.state", state: camera.state });
+    return synchronized;
   }
+  return snapshot;
 }
 function sampleInput(): void {
   if (suspended) return;
@@ -98,10 +106,10 @@ function sampleInput(): void {
   publishSnapshot(currentEngine().inputSample(idle, available));
 }
 function fallbackCamera(message: string): void {
-  if (currentEngine().settings.focusPresenceSource !== "camera") return;
+  if (!camera.state.enabled || currentEngine().settings.focusPresenceSource !== "camera"
+    || currentEngine().snapshot.round.breakMode === "standing") return;
   publishSnapshot(currentEngine().cameraSample("unknown"));
   const settings = currentEngine().applySettings({ focusPresenceSource: "input" });
-  syncCamera();
   broadcast({ type: "settings.changed", settings });
   sampleInput();
   broadcast({ type: "core.error", code: "CAMERA_UNAVAILABLE", message: `${message}，已切回触控感知。可检查系统摄像头权限后重新选择监控。`, recoverable: true });
@@ -113,9 +121,10 @@ function statistics() {
   if (runtimeFailure) throw runtimeFailure;
   return collectStatistics(store);
 }
-function publishSnapshot(snapshot = currentEngine().snapshot): void {
+function publishSnapshot(snapshot = currentEngine().snapshot): TimerSnapshot {
+  snapshot = syncCamera(snapshot);
   broadcast({ type: "timer.snapshot", snapshot });
-  if (!store || runtimeFailure) return;
+  if (!store || runtimeFailure) return snapshot;
   const currentDate = localDateKey(new Date());
   if (lastStatisticsRevision !== store.completedSessionsRevision || lastStatisticsDate !== currentDate) {
     broadcast({ type: "stats.changed", statistics: statistics() });
@@ -126,6 +135,7 @@ function publishSnapshot(snapshot = currentEngine().snapshot): void {
     lastCompletedRoundRevision = currentEngine().completedRoundsRevision;
     notify("轮次完成", `已进入${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"}`);
   }
+  return snapshot;
 }
 function notify(title: string, body: string): void {
   if (!currentEngine().settings.notificationsEnabled || !Notification.isSupported()) return;
@@ -135,7 +145,8 @@ function updateTray(snapshot: TimerSnapshot): void {
   if (!tray) return;
   const locked = runtimeFailure !== undefined || snapshot.automation.pauseReason === "system-lock";
   const action = snapshot.status === "running" ? "暂停" : snapshot.status === "idle" ? "开始" : "继续";
-  const title = `${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"} · ${formatRemaining(snapshot.remainingMs)}`;
+  const roundTitle = `${snapshot.round.breakMode === "standing" ? "大站" : ""}${snapshot.round.kind === "focus" ? "专注" : snapshot.round.kind === "short-break" ? "短休" : "长休"}`;
+  const title = `${roundTitle} · ${formatRemaining(snapshot.remainingMs)}`;
   const state = `${title}:${action}:${locked}`;
   if (state === lastTrayState) return;
   const command = snapshot.status === "running" ? "pause" : snapshot.status === "idle" ? "start" : "resume";
@@ -174,8 +185,7 @@ function runCommand(command: Parameters<TimerEngine["command"]>[0]): TimerSnapsh
   if (runtimeFailure) throw runtimeFailure;
   try {
     const snapshot = currentEngine().command(command);
-    coreOperation(() => publishSnapshot(snapshot));
-    return snapshot;
+    return coreOperation(() => publishSnapshot(snapshot));
   } catch (reason) {
     const code: unknown = reason instanceof Error ? Reflect.get(reason, "code") : undefined;
     if (typeof code === "string" && code.startsWith("SQLITE_")) failRuntime(reason);
@@ -262,9 +272,9 @@ function createWindow(view: DesktopView = "timer", previous?: BrowserWindow): Br
   });
   // 同文档 fragment 导航也触发 did-start-loading，但不会再次 did-finish-load。
   window.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
-    if (window === mainWindow && isMainFrame && !isInPlace) backgroundOperation(() => { rendererReady = false; syncCamera(); });
+    if (window === mainWindow && isMainFrame && !isInPlace) backgroundOperation(() => { rendererReady = false; publishSnapshot(); });
   });
-  window.webContents.on("did-finish-load", () => { if (window === mainWindow) backgroundOperation(() => { rendererReady = true; syncCamera(); }); });
+  window.webContents.on("did-finish-load", () => { if (window === mainWindow) backgroundOperation(() => { rendererReady = true; publishSnapshot(); }); });
   window.webContents.on("render-process-gone", () => { if (!quitting && window === mainWindow) backgroundOperation(() => { rendererReady = false; fallbackCamera("摄像头检测窗口已中断"); }); });
   window.once("closed", () => {
     if (!restoredPrevious && previous && !previous.isDestroyed()) previous.destroy();
@@ -283,7 +293,7 @@ function createWindow(view: DesktopView = "timer", previous?: BrowserWindow): Br
       mainWindow = previous;
       window.destroy();
       rendererReady = !previous.webContents.isLoadingMainFrame();
-      backgroundOperation(() => syncCamera());
+      backgroundOperation(() => { publishSnapshot(); });
       previous.show();
       previous.focus();
       broadcast({ type: "core.error", code: "WINDOW_REPLACEMENT_FAILED", message: "窗口切换未完成，已保留原窗口。请重试保存设置或重新打开窗口。", recoverable: true });
@@ -310,13 +320,13 @@ function queueWindowReplacement(): void {
       || followingWindows.has(previous) === currentEngine().settings.followWorkspaces) return;
     windowLayout.remember(previous);
     const view = readDesktopView(new URL(previous.webContents.getURL()).hash);
-    backgroundOperation(() => { rendererReady = false; syncCamera(); });
+    backgroundOperation(() => { rendererReady = false; publishSnapshot(); });
     mainWindow = createWindow(view, previous);
   });
 }
 function showWindow(): void { if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createWindow(); else { if (mainWindow.isMinimized()) mainWindow.restore(); app.focus({ steal: false }); mainWindow.show(); mainWindow.focus(); } }
 function installIpc(): void {
-  ipcMain.handle("pomodoro:get-snapshot", (event) => { assertSender(event); if (runtimeFailure) throw runtimeFailure; return coreOperation(() => { const snapshot = currentEngine().snapshot; publishSnapshot(snapshot); return timerSnapshotSchema.parse(snapshot); }); });
+  ipcMain.handle("pomodoro:get-snapshot", (event) => { assertSender(event); if (runtimeFailure) throw runtimeFailure; return coreOperation(() => timerSnapshotSchema.parse(publishSnapshot())); });
   ipcMain.handle("pomodoro:get-settings", (event) => { assertSender(event); return settingsSchema.parse(currentEngine().settings); });
   ipcMain.handle("pomodoro:get-capabilities", (event) => { assertSender(event); return capabilities; });
   ipcMain.handle("pomodoro:get-camera-state", (event) => { assertSender(event); return cameraStateSchema.parse(camera.state); });
@@ -343,7 +353,6 @@ function installIpc(): void {
     if (patch.focusPresenceSource === "camera" && !capabilities.cameraPresence) throw new Error("当前平台不支持摄像头感知");
     return coreOperation(() => {
       const settings = currentEngine().applySettings(patch);
-      syncCamera();
       broadcast({ type: "settings.changed", settings });
       mainWindow?.setAlwaysOnTop(settings.alwaysOnTop);
       queueWindowReplacement();
@@ -358,10 +367,10 @@ function startMonitoring(): void {
     backgroundOperation(() => { if (camera.expired(performance.now())) fallbackCamera("摄像头检测响应超时"); sampleInput(); });
   }, 1000);
   tickTimer = setInterval(() => backgroundOperation(() => { if (camera.expired(performance.now())) fallbackCamera("摄像头检测响应超时"); publishSnapshot(); }), 500);
-  powerMonitor.on("suspend", () => backgroundOperation(() => { suspended = true; publishSnapshot(currentEngine().systemSuspend()); syncCamera(); notify("计时已暂停", "系统进入睡眠，恢复后等待安全条件继续计时"); }));
-  powerMonitor.on("resume", () => backgroundOperation(() => { suspended = false; syncCamera(); publishSnapshot(); }));
-  powerMonitor.on("lock-screen", () => backgroundOperation(() => { screenLocked = true; publishSnapshot(currentEngine().systemLock()); syncCamera(); }));
-  powerMonitor.on("unlock-screen", () => backgroundOperation(() => { screenLocked = false; publishSnapshot(currentEngine().systemUnlock()); syncCamera(); }));
+  powerMonitor.on("suspend", () => backgroundOperation(() => { suspended = true; publishSnapshot(currentEngine().systemSuspend()); notify("计时已暂停", "系统进入睡眠，恢复后等待安全条件继续计时"); }));
+  powerMonitor.on("resume", () => backgroundOperation(() => { suspended = false; publishSnapshot(); }));
+  powerMonitor.on("lock-screen", () => backgroundOperation(() => { screenLocked = true; publishSnapshot(currentEngine().systemLock()); }));
+  powerMonitor.on("unlock-screen", () => backgroundOperation(() => { screenLocked = false; publishSnapshot(currentEngine().systemUnlock()); }));
 }
 app.whenReady().then(() => {
   if (!ownsInstanceLock) return;
