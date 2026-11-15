@@ -1,11 +1,11 @@
 # 大站休息验证记录
 
-日期：2026-11-15。分支：`codex/standing-break`。实现前提交：`16162e7`；本记录及功能改动尚未发布到 beta.3 安装包。行为与取舍见[设计记录](standing-break-design.md)，传播材料见[调研记录](standing-break-research.md)。
+日期：2026-11-15。分支：`codex/standing-break`。实现前提交：`16162e7`，功能提交：`dbbb634`。本轮已生成并安装本地构建 `0.1.0-beta.3-standing.dbbb634`，未改变公开 beta.3 安装包、源码版本或发布 tag。行为与取舍见[设计记录](standing-break-design.md)，传播材料见[调研记录](standing-break-research.md)。
 
 ## 执行环境
 
 - macOS 26.4.1（25E253），Apple Silicon / arm64。
-- Node.js 24.15.0，Electron 33.4.11；本分支的本地开发构建与独立临时 `userData`。
+- Node.js 24.15.0，Electron 33.4.11；本分支的开发构建、本地 ARM64 DMG 和安装后的应用。自动化使用独立临时 `userData`，正式替换后启动使用原用户数据目录。
 - 摄像头 E2E 使用 Chromium 模拟媒体流和打包在构建中的真实本地模型；输入、锁屏与时间推进使用受控注入，不读取真实输入内容，不使用用户数据库。
 
 ## 自动化结果
@@ -20,6 +20,10 @@
 | `npm run build` | 通过 | 构建 Main、preload、Renderer 和本地摄像头资源。 |
 | Electron 大站专项 | 3 项通过 | 准备期选择、最小窗口与最长值、摄像头释放及自然完成后的恢复。 |
 | `npm run test:e2e` | 全量 28/28 通过 | 覆盖摄像头、原生窗口、布局、设置、计时、统计和本轮大站。 |
+| 本地 ARM64 DMG 打包 | 通过 | 仅以构建参数覆盖版本为 `0.1.0-beta.3-standing.dbbb634`，保持源码版本和应用标识。 |
+| `node scripts/smoke-mac-dmg.mjs <本轮 DMG>` | 通过 | 只读挂载、复制安装、严格签名和原生 SQLite 校验；离线摄像头本地推理、托盘、挂件和设置操作。 |
+| 使用本轮包执行摄像头大站 E2E | 1/1 通过 | 大站释放媒体流、重载保留偏好、自然归零后恢复新检测代次。 |
+| `/Applications` 替换与正常启动 | 通过 | 从本轮 DMG 复制，安装后再次验签及核对 ASAR 哈希；正常打开并在原生窗口确认安装路径。 |
 
 状态机和组件用例先取得新增场景失败，再完成实现。实际 SQLite 用例先验证旧设置缺少新字段失败，再补读取兼容。当前原生数据库四条迁移及校验和保持，未改写已发布迁移。
 
@@ -42,10 +46,28 @@
 | 本分支 Electron 自动化、模拟输入／摄像头／电源事件 | 已执行，详见上表 | 未执行 |
 | 物理摄像头指示灯在大站期间关闭、下一轮恢复 | 待验收 | 待验收 |
 | 真实键鼠、锁屏、睡眠与手动继续 | 待验收 | 待验收 |
-| 安装包与安装后完整流程 | 本轮未打包 | 本轮未打包 |
+| 安装包与安装后检查 | ARM64 DMG 复制安装及自动化通过；本机正常打开通过，浏览器下载隔离首次批准未验 | 本轮未打包 |
 
 自动化不能证明用户实际站立，也不替代真实系统权限、物理摄像头或安装验收。发布前按[路线图的大站验证门](roadmap.md#大站验证门)分别记录 OS、架构、最终构建／提交及结果。
 
+## 本地安装交付
+
+按用户要求替换本地旧软件，构建命令为：
+
+```sh
+npm run package --workspace=@pomodoro/desktop -- --mac dmg --arm64 --publish never -c.extraMetadata.version=0.1.0-beta.3-standing.dbbb634
+```
+
+- 安装包：`apps/desktop/dist/Pomodot-0.1.0-beta.3-standing.dbbb634-mac-arm64.dmg`。
+- DMG SHA-256：`e7d5375d89a84475b0b2140da123c16d3adcbbf6007cb702eb0db5a93fdf6d40`。
+- 包内与已安装 `app.asar` SHA-256：`ecd92db69063a4c97b8c2e6af0acd7b9e9f6457f06a5c82bf8c99f7bbb6c675b`。
+- 安装位置：`/Applications/Pomodoro Timer.app`，应用标识仍为 `com.easton.pomodotimer`。保持原有 ad hoc 签名、hardened runtime 和受限媒体 entitlement，未改变系统安全设置。
+- 旧应用移到废纸篓；此前五处旧打包产物也已移到废纸篓。新版本验证后再替换，没有删除用户数据库。
+- 原 SQLite 数据库在应用退出后先备份到已忽略的 `diagnostics/installed-data-backup-v6_iby8e/`；正式启动后核对原完成专注记录逐条保留。预览数据目录没有导入正式数据。
+- 正式安装版通过系统正常打开，进程和原生窗口均指向 `/Applications/Pomodoro Timer.app`；保留原来的轮次进度，没有为展示效果跳过或重置真实轮次。
+
+本地构建及交付证据保存在已忽略的 `diagnostics/standing-install-build.json`、`standing-install-result.json` 和签名检查结果中。没有创建发布 tag，也没有上传或发布安装包。
+
 ## 接续位置
 
-代码、测试与权威文档位于 `codex/standing-break`，实现前基线为 `16162e7`。本轮实现与自动化验收完成；正式发布前继续上表的 macOS / Windows 实机门。验证日志与未精选截图位于已忽略的 `apps/desktop/test-results/`，精选截图见[文档索引](README.md#产品截图)。
+代码、测试与权威文档位于 `codex/standing-break`，功能提交为 `dbbb634`。本轮实现、自动化验收和本地 ARM64 安装交付完成；正式发布前继续上表的 macOS / Windows 实机门。验证日志与未精选截图位于已忽略的 `apps/desktop/test-results/`，精选截图见[文档索引](README.md#产品截图)。
