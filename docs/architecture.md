@@ -21,7 +21,7 @@ Main 在就绪及打开数据库之前取得单实例锁；同一 userData 的�
 
 ## 2. 进程边界
 
-React 渲染快照、导航设置和统计视图，并维护临时表单。Preload 只暴露 `getSnapshot`、`command`、`getSettings`、`updateSettings`、`getCapabilities`、`getStatistics`、`getCameraState`、`reportCameraPresence`、`subscribe`。Main 验证调用来源和 payload，广播经 Zod 校验的状态事件。
+React 渲染快照、导航设置和统计视图，并维护临时表单。主窗口 Preload 只暴露 `getSnapshot`、`command`、`getSettings`、`updateSettings`、`getCapabilities`、`getStatistics`、`getCameraState`、`reportCameraPresence`、`subscribe`。Main 验证调用来源和 payload，广播经 Zod 校验的状态事件。
 
 `TimerEngine` 使用单调时钟计算剩余时间，在内存中维护输入和摄像头三态并向 Renderer 提供实时快照。专注和活动休息使用用户选中的来源，桌前休息始终使用系统输入。Store 单独保存恢复计时所需的检查点、设置和已完成专注记录。重新打开应用时，Main 恢复轮次与专注的手动暂停锁；旧的手动暂停休息转为自动等待。在收到新样本之前，两种在场状态为 `unknown`，休息准备状态为 `null`。
 
@@ -33,7 +33,7 @@ macOS 打包在生成 DMG 前通过自定义 signer 对应用、辅助进程、�
 
 Main 持有摄像头启停状态和递增代次，通过 `camera.state` 发布。Renderer 初始读取 `getCameraState`，每次代次变化先清理旧流与检测器，再启动新检测；异步权限/模型初始化迟到也必须关闭资源。Main 为首次有效样本设置 25 秒启动期限，随后按单调时钟检查 5 秒心跳期限。过期、报告 `unknown`、非计划的主窗口销毁或 Renderer 崩溃时清空摄像头状态，保存触控回退设置并广播 `settings.changed` 和可恢复错误；旧代次样本被拒绝。窗口重新加载先停用旧代次，加载完成后重新获取监控状态和新样本。切换桌面跟随引起的计划内窗口重建保留选中的监控模式，只停止旧代次、将摄像头在场置为 `unknown`，等待新主窗口重新检测；旧窗口的关闭不触发故障回退。
 
-Main 管理一个对外的可缩放主窗口，并根据内容区域约束原生窗口尺寸。切换 macOS 窗口类型时可短暂保留旧窗口，待新窗口就绪后销毁；只有当前主窗口的可信主 frame 可调用 IPC。Renderer 随视口宽高调整布局，通过 Electron 拖动区域移动窗口，按钮、菜单和表单保留普通指针交互。拖动和缩放由原生窗口处理。
+Main 管理一个对外的可缩放主窗口，并根据内容区域约束原生窗口尺寸。切换 macOS 窗口类型时可短暂保留旧窗口，待新窗口就绪后销毁；只有当前主窗口的可信主 frame 可调用主窗口 IPC。Renderer 随视口宽高调整布局，通过 Electron 拖动区域移动窗口，按钮、菜单和表单保留普通指针交互。拖动和缩放由原生窗口处理。自然完成时另由 `CompletionReminders` 管理一个可复用的独立提醒窗口；该窗口只显示 Main 的临时提醒状态，不初始化摄像头或新的 TimerEngine。
 
 ## 3. 平台集成
 
@@ -43,7 +43,10 @@ Main 管理一个对外的可缩放主窗口，并根据内容区域约束原生
 - 摄像头只在用户已选择监控时启用；Main 将媒体权限限制为可信主窗口的主 frame、视频权限，拒绝麦克风和外部 frame。macOS 打包声明摄像头用途。CSP 仅为本地 MediaPipe 增加 WebAssembly 执行许可，不引入远程脚本或模型。
 - 选中的监控在隐藏、最小化和页面导航时继续检测，窗口禁用后台节流；系统睡眠/锁屏时释放摄像头，恢复/解锁后签发新代次并等待新结果。切回触控、退出或检测失败都会释放资源。故障回退持久化为触控，避免反复请求权限。
 - Tray 菜单、窗口、通知都调用同一 TimerEngine，不复制状态。
-- Tray 只在展示秒数、可用操作或状态改变时重建菜单；完成通知依赖成功持久化后的完成计数，跳过轮次不发“轮次完成”。
+- Tray 只在展示秒数、可用操作或状态改变时重建菜单；完成卡片依赖成功持久化后的完成计数及 `completedRound`，跳过轮次不产生完成提醒。Main 用对应完成版本去重，系统不再额外发送完成通知。
+- 完成提醒窗口有单独的隔离 session、严格 CSP 和自包含 preload，仅允许自身主 frame 读取/订阅当前提醒及按 ID 确认。其 sender 不获得主窗口的计时命令、设置或摄像头权限，全部权限请求拒绝。主窗口的既有 preload allowlist 不增加提醒方法。
+- 提醒使用普通悬浮层级；macOS 使用 panel 参与桌面与原生全屏，自动显示只调用 `showInactive()`。内容按主题更新，手动确认后隐藏复用窗口，以完成 IPC 回复；下一次完成替换当前条目。锁屏和睡眠隐藏未确认内容，恢复后可重现，退出清除。提醒创建/加载失败只发布可恢复界面错误，不进入存储故障冻结路径。
+- Preload 分别构建为自包含的 `index.js` 和 `reminder.js`。主入口保持单入口 Rollup，提醒入口在生成阶段独立打包并监听依赖；避免多入口共享分块使 sandbox 的受限 `require` 无法加载桥接代码。
 - 关闭窗口在 Windows 上隐藏到托盘，退出菜单设置退出标记后真正退出；macOS 遵循应用生命周期。
 - `contextIsolation`、sandbox、CSP、禁止导航和外部链接 allowlist 必须保持。
 - macOS 使用 `hiddenInset`，为左上角交通灯预留空间。Windows 使用 Electron 的 `hidden` 和 32 px 标题栏覆盖层，保留系统窗口按钮，停止使用会被 Alt 唤出的默认应用菜单。覆盖层单独占一行，Main 在约束内容尺寸时扣除该行；Renderer 按下方计时器的可用宽高排版。计时器留白在两个平台都由系统处理拖动，按钮仍可点击。
