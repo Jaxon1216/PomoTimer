@@ -11,6 +11,7 @@ const machOMagic = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xca
 const appEntitlements = {
   "com.apple.security.cs.allow-jit": true,
   "com.apple.security.cs.disable-library-validation": true,
+  "com.apple.security.device.camera": true,
 };
 
 export function defaultMacAppPath() {
@@ -72,7 +73,11 @@ export async function verifyMacSignature(appPath) {
   let executablePath;
   for (const bundle of inventory.apps) {
     const { stdout } = await macTool("/usr/bin/plutil", ["-convert", "json", "-o", "-", join(bundle, "Contents/Info.plist")]);
-    const executable = JSON.parse(stdout).CFBundleExecutable;
+    const info = JSON.parse(stdout);
+    const executable = info.CFBundleExecutable;
+    if (bundle === app) {
+      assert.ok(typeof info.NSCameraUsageDescription === "string" && info.NSCameraUsageDescription.trim() !== "", "Camera access must have a visible macOS usage description.");
+    }
     assert.ok(typeof executable === "string" && executable !== "" && basename(executable) === executable, `Invalid executable in ${bundle}`);
     const path = await realpath(join(bundle, "Contents/MacOS", executable));
     assert.ok(inventory.machO.includes(path), `App executable must be a bundled Mach-O file: ${path}`);
@@ -105,6 +110,8 @@ export async function verifyMacSignature(appPath) {
     hardenedRuntime: true,
     teamIdentifier: null,
     requiredAppEntitlements: appEntitlements,
+    cameraUsageDeclared: true,
+    cameraEntitlementVerified: true,
     nativeModules: inventory.nativeModules.map((path) => relative(app, path)),
     checked,
     gatekeeperApprovalTested: false,

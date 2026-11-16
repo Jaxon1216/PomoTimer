@@ -1,67 +1,60 @@
 # PomoTimer · Pomodot
 
-面向 macOS 和 Windows 的本地桌面番茄钟。用可配置的专注与休息节奏、系统输入闲置检测和本地统计，记录真正完成的专注轮次。
+面向 macOS 和 Windows 的本地桌面番茄钟。用可配置的长短休节奏、触控与摄像头两种感知模式、桌面小挂件和本地统计，记录真正完成的专注轮次。
 
 仓库名为 **PomoTimer**，安装包以 **Pomodot** 发布，应用内名称为 **Pomodoro Timer**。
 
-[下载安装包](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.2) · [更新记录](CHANGELOG.md) · [文档索引](docs/README.md) · [问题反馈](https://github.com/Jaxon1216/PomoTimer/issues)
+[下载安装包](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.3) · [更新记录](CHANGELOG.md) · [文档索引](docs/README.md) · [问题反馈](https://github.com/Jaxon1216/PomoTimer/issues)
 
 ## 下载与安装
 
-安装包是普通用户的使用入口，**不需要安装 Node.js、运行 npm 或自行编译**。macOS 免费分发包可能需要在首次打开时手动允许，具体方法与限制见下文。
-
-下方下载目前仍是 **v0.1.0-beta.2（预发布）旧包**，未包含本次签名修复，也未完成下载与首次打开验收。新的免费分发构建尚未发布，不能用新构建的验证结果保证旧包可用。
-
-如需测试本次修复，可下载 [Intel x64 预览包](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745/artifacts/13487899158)或 [Apple Silicon ARM64 预览包](https://github.com/Jaxon1216/PomoTimer/actions/runs/42187712745/artifacts/13488491818)。这是提交 `5449d66` 的 CI 产物，需要登录 GitHub，保留 14 天；先解压 ZIP，再按下文安装其中的 DMG。文件名仍带 `beta.2`，但内容与下方旧 Release 不同。两个架构均通过签名与安装包自动化检查，人工首次打开状态见[安装分发验证](docs/roadmap.md#安装分发验证)。
-
-ARM64 免费分发流程已在 macOS 26.4.1 真机完成浏览器下载、首次系统批准，以及完整退出后的再次打开；Intel 目前通过 CI，仍待真实 Intel Mac 验证。具体测试构建与校验值见上述验证记录。
+当前版本为 **v0.1.0-beta.3（预发布）**，包含触控 / 监控感知、可缩放桌面挂件、长短休周期和本地专注记录。下载匹配平台的安装包即可使用，无需安装 Node.js 或配置开发环境。此版本供体验与反馈使用，尚未完成全部真实设备验收。
 
 | 平台 | 安装包 |
 | --- | --- |
-| Windows x64 | [EXE 安装向导](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.2/Pomodot-0.1.0-beta.2-windows-x64-setup.exe) |
-| macOS Apple Silicon | [ARM64 DMG](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.2/Pomodot-0.1.0-beta.2-mac-arm64.dmg) |
-| macOS Intel | [x64 DMG](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.2/Pomodot-0.1.0-beta.2-mac-x64.dmg) |
+| Windows x64 | [EXE 安装向导](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.3/Pomodot-0.1.0-beta.3-windows-x64-setup.exe) |
+| macOS Apple Silicon | [ARM64 DMG](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.3/Pomodot-0.1.0-beta.3-mac-arm64.dmg) |
+| macOS Intel | [x64 DMG](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.3/Pomodot-0.1.0-beta.3-mac-x64.dmg) |
 
-- macOS：打开与芯片类型匹配的 DMG，将应用拖入 Applications。
+- macOS：M 系列芯片选择 ARM64，Intel 芯片选择 x64。打开对应 DMG，将应用拖入 Applications，再从 Applications 启动。
 - Windows：运行 EXE 安装向导，可选择安装目录。
-- 下载后可与同一发布中的 [SHA256SUMS](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.2/SHA256SUMS) 核对文件校验值。
-- 当前公开安装包**未使用开发者证书签名，macOS 也未公证**。系统可能阻止打开或提示未知发布者。
+- 下载后可与同一发布中的 [SHA256SUMS](https://github.com/Jaxon1216/PomoTimer/releases/download/v0.1.0-beta.3/SHA256SUMS) 核对文件校验值。
+- macOS 安装包使用免费的 **ad hoc 完整性签名**，没有 Developer ID 签名或 Apple 公证，首次打开仍可能需要手动批准。Windows 安装包未使用开发者证书签名，可能显示未知发布者；请先核对来源与校验值。
 
 ### macOS 首次打开
 
-1. 在苹果菜单的“关于本机”中确认芯片：Intel Mac 选择 **x64**，M 系列芯片选择 **ARM64**。
-2. 下载本仓库提供的安装包；Release 包可与同次发布的 `SHA256SUMS` 核对。预览 artifact 需先解压 ZIP；打开 DMG，将应用拖入 Applications。
-3. 从 Applications 打开 **Pomodoro Timer**。如果提示“未打开”“无法验证开发者”或“Apple 无法验证是否包含恶意软件”，先点“完成”或取消。
-4. 进入“系统设置 → 隐私与安全性”，向下找到“已阻止 Pomodoro Timer”旁的“仍要打开”。在后续确认中再次选择“仍要打开”；系统如要求认证，请在电脑上使用 Touch ID 或管理员密码。
-5. 应用打开后，后续从 Applications 正常启动即可。更换构建或升级后，系统可能重新要求批准。
+1. 从 Applications 打开 **Pomodoro Timer**。如果提示“无法验证开发者”或“Apple 无法验证是否包含恶意软件”，先点“完成”或取消。
+2. 进入“系统设置 → 隐私与安全性”，找到“已阻止 Pomodoro Timer”旁的“仍要打开”，按系统提示再次确认。需要认证时，请在电脑上使用 Touch ID 或管理员密码。
+3. 批准后通常可从 Applications 正常启动；升级或更换构建后，系统可能重新要求批准。受组织管理的电脑可能不允许添加例外。
 
-上述步骤仅为已确认来源的这个应用添加例外，参见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。macOS 15 Sequoia 起，[Control-click 打开的旧方法不再适用](https://developer.apple.com/news/?id=saqachfa)。受组织管理的电脑可能不允许添加例外。
+上述操作仅为已确认来源的这个应用添加例外，见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。ad hoc 签名用于验证代码完整性，不提供 Apple 认可的开发者身份。如果提示“已损坏”“将损坏你的电脑”，或没有“仍要打开”，请记录完整提示、macOS 版本及安装包文件名后[反馈](https://github.com/Jaxon1216/PomoTimer/issues)，不要全局关闭系统安全保护。
 
-如果提示“已损坏”“将损坏你的电脑”，或根本没有“仍要打开”，请记录完整提示、macOS 版本和下载的文件名后反馈；不要直接按未知开发者问题处理，也不要全局关闭系统安全保护。**现有 beta.2 尚未通过完整下载与首次打开验收，不能保证手动允许后就能运行。**
+### 基本使用
 
-当前源码为下一版 macOS 安装包配置了免费的 **ad hoc 签名**，用于检查代码完整性，并保留 hardened runtime。它不提供 Apple 认可的开发者身份，也不等于公证，因此仍可能需要上述手动批准。此改动**尚未发布到上方 beta.2 下载包**；验收状态见[安装分发验证](docs/roadmap.md#安装分发验证)。
+1. 安装后打开应用，默认使用触控模式。点击开始或按空格进入第一轮专注；连续无输入达到默认 40 秒后自动暂停，恢复输入后按状态继续。
+2. 如需摄像头感知，点击计时器右上角、统计按钮左侧的模式按钮切换为监控，并允许摄像头访问。在场后自动开始专注，离席时暂停专注；切回触控即关闭摄像头。摄像头不可用时会提示并回退触控。
+3. 专注完成后自动进入短休或长休，满足离席或无输入条件后开始休息计时。默认活动休息使用当前感知模式，桌前休息始终依据无输入。输入准备期的最后 10 秒会显示倒数，第 40 秒才开始完整的休息时长；中途有输入则重新等待。
+4. 空格可开始、暂停或继续，也可点击下一步跳过当前轮。专注中的手动暂停需要主动继续；休息按过暂停后，满足条件仍会自动计时。设置、统计、输入框和菜单中的空格保留原有操作。
+5. 拖动窗口边缘缩成桌面挂件，拖动计时器上的留白移动窗口。最小内容区域为 160×180，小窗仍显示时间、轮次、暂停原因及操作。设置中可分别开关置顶、自动淡化和 macOS 的跟随桌面与全屏。[查看最小窗口](docs/assets/screenshots/drag-minimum-interrupted-break.png)
+6. 点击统计图标查看今日、本周和热力图记录；只有完整完成的专注轮才计入。点击“更多操作”打开设置，调整专注、长短休时长和轮数。正在进行的轮次保留原计划时长。[设置生效时机](docs/product-spec.md#2-默认配置与设置)
 
-### 版本与已知限制
+### 已知限制
 
-**主分支不等于已发布安装包。** `main` 已合入[计时器故障恢复、数据保护和实时统计修复（#2）](https://github.com/Jaxon1216/PomoTimer/pull/2)，这些改动尚未包含在上面的 beta.2 安装包中；体验主分支需从源码运行。以下功能和开发说明以当前主分支为准，下载版以[对应发布说明](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.2)为准。
+- 物理摄像头的首次授权、不同光照、设备断开和权限撤销，尚未完成 macOS/Windows 全部真机验收。
+- 系统输入、通知、锁屏、睡眠和人工安装仍有待验收项目。桌面挂件的 macOS 原生全屏、缩放和 Cmd-Tab 已有本机探针记录，桌面滑动、Split View、外接屏及 Windows 原生窗口体验仍待人工验收。
+- 部分旧计时快照可能无法恢复。应用会保留数据库备份，仅在用户选择后归档并重建；升级前建议备份本地数据。
 
-beta.2 已知问题：
-
-- 锁屏事件尚未接入，锁屏前请手动暂停。
-- 部分旧快照可能无法升级恢复，升级前请备份本地数据。
-- 统计页停留期间不会实时刷新，重新进入页面可刷新。
-- 输入检测持续故障时，手动继续可能再次被暂停。
-
-安装包已在 GitHub runner 完成构建和打包应用自动化检查；真实设备的系统输入、通知、锁屏、睡眠及人工安装验证仍未全部完成。模拟事件和自动化启动测试不代表真实平台验收，详见 [Phase 1 发布门](docs/roadmap.md#phase-1-发布门)。
+模拟媒体流、模拟系统事件和自动化启动检查不代表全部真实设备验收已通过。具体范围见 [Phase 1 发布门](docs/roadmap.md#phase-1-发布门)、[摄像头验证门](docs/roadmap.md#摄像头验证门)与[桌面挂件验证记录](docs/desktop-widget-validation.md)。版本改动以[对应发布说明](https://github.com/Jaxon1216/PomoTimer/releases/tag/v0.1.0-beta.3)为准。
 
 ## 主要功能
 
-- **可配置节奏**：默认 `30 / 5 / 30 / 5 / 30 / 10` 分钟，三轮专注后进入长休；可调整各轮时长和每周期专注轮数。
-- **输入闲置检测**：默认连续 40 秒无系统输入后暂停专注，恢复输入后按状态自动继续；手动暂停不会被自动解除。
-- **两种休息模式**：活动休息与桌前休息。当前均基于无输入信号判断开始与暂停，不代表已验证离席、走动或运动。
+- **可配置节奏**：默认 `30 / 5 / 30 / 5 / 30 / 10` 分钟，三轮专注后进入长休；可调整各轮时长和每周期专注轮数，底部周期条按计划时长分配宽度并标明当前位置。
+- **输入闲置检测**：默认连续 40 秒无系统输入后暂停专注，恢复输入后按状态自动继续；专注中的手动暂停不会被自动解除。
+- **两种感知模式**：默认触控，使用系统输入闲置信号；可主动切换监控并授予摄像头权限。监控确认在场后自动开始专注，离席后自动计时活动休息；摄像头失败时提示并回退触控。
+- **两种休息模式**：活动休息在监控模式下依据摄像头离席，在触控模式下依据无输入；桌前休息始终依据无输入。准备期最后 10 秒可见倒数，不抵扣正式休息时长；休息按过暂停仍可自动恢复，不代表已验证走动或运动。
 - **本地统计**：今日、本周和最近 52 周热力图；只有完整完成的专注轮才计入统计，跳过或重置不计入。
-- **桌面控制**：拖动窗口边缘缩放计时器，拖动留白移动窗口。支持置顶、托盘菜单、系统通知，以及浅色/深色/跟随系统主题。
-- **恢复与数据保护（主分支）**：睡眠与重启不补计离线时间；锁屏门禁、输入故障下的显式手动计时、单实例保护、SQLite 故障备份与用户确认重建。
+- **桌面挂件**：拖动边缘缩放到最小 160×180，拖动留白移动；置顶、自动淡化独立控制，macOS 可跟随桌面与全屏。另有托盘菜单、系统通知，以及浅色/深色/跟随系统主题。
+- **恢复与数据保护**：睡眠与重启不补计离线时间；锁屏暂停、输入故障下的显式手动计时、单实例保护、SQLite 故障备份与用户确认重建。
 
 ### 界面预览
 
@@ -71,21 +64,13 @@ beta.2 已知问题：
 
 这两张图来自开发版在 macOS 上的真实 Electron 测试窗口。[截图版本与重现方法](docs/README.md#产品截图)
 
-### 基本使用
-
-1. 打开应用，点击开始进入第一轮专注。
-2. 专注完整结束后进入休息轮。休息默认等待无输入条件，也可手动开始；再次输入仍可能自动暂停休息。
-3. 使用暂停/继续控制当前轮，或点击下一步跳过；下一轮专注需要手动开始。
-4. 点击计时器右上角的统计图标查看专注记录，点击“更多操作”打开设置。修改节奏后，正在运行的轮次仍按原计划计时。[设置生效时机](docs/product-spec.md#2-默认配置与设置)
-5. 在开发版中，拖动窗口边缘调整大小，拖动计时器上的留白移动窗口。内容区域最小为 160×180，宽 160 px 时最高可拉到 240 px。小窗仍显示轮次、剩余时间和暂停原因，可直接点圆形播放按钮继续，或点统计图标查看记录。[查看最小窗口](docs/assets/screenshots/drag-minimum-interrupted-break.png)
-
 ## 本地数据与隐私
 
 应用离线运行，设置、计时快照和完成记录保存在当前设备的 SQLite 数据库中，文件为 Electron `app.getPath("userData")` 下的 `pomodoro.sqlite`。
 
-系统输入检测只读取“距最近一次系统输入的秒数”，不记录按键内容、鼠标位置、活动窗口或屏幕内容。当前没有账号、云同步或遥测，也没有启用摄像头检测；摄像头在场和手动站立专注属于后续阶段，Linux 不在当前支持范围。
+系统输入检测只读取“距最近一次系统输入的秒数”，不记录按键内容、鼠标位置、活动窗口或屏幕内容。摄像头感知需要主动选择监控，画面只在本机瞬时处理，不保存、不上传，不识别身份。当前没有账号、云同步或遥测；手动站立专注属于后续阶段，Linux 不在当前支持范围。
 
-开发版只在内存中使用闲置秒数和推断出的在场状态。重启后会恢复轮次和剩余时间，等新的输入采样再判断在场状态。从旧版本升级时，已有备份保留原样；详见[更新记录](CHANGELOG.md)。
+闲置秒数和推断出的在场状态只在内存中使用。重启后会恢复轮次和剩余时间，等选中来源的新样本再判断在场状态。从旧版本升级时，已有备份保留原样；详见[更新记录](CHANGELOG.md)。
 
 ## 从源码开发
 
@@ -110,12 +95,11 @@ npm run dev
 | `npm run test:store` | 重建原生依赖，使用 Electron 运行时验证真实 SQLite |
 | `npm run test:e2e` | 构建、重建原生依赖并运行 Playwright Electron E2E |
 | `npm run build` | 构建应用代码 |
-| `npm run package` | 先构建，再使用 electron-builder 生成当前平台安装包 |
-| `npm run test:packaging` | 仅 macOS；打包后对真实 `.app` 验签，并验证篡改资源与原生模块会被拒绝 |
+| `npm run package` | 使用 electron-builder 生成当前平台安装包 |
 
-安装包输出在 `apps/desktop/dist/`。打包后，可在对应系统运行 `node scripts/smoke-packaged.mjs` 检查打包应用。macOS 另提供签名和 DMG 检查，见[安装包与预发布](docs/README.md#安装包与预发布)；开发启动与原生回归说明见[开发验证文档](docs/README.md#本地原生回归)。
+安装包输出在 `apps/desktop/dist/`。打包后，可在对应系统运行 `node scripts/smoke-packaged.mjs` 检查打包应用；开发启动与原生回归说明见[开发验证文档](docs/README.md#本地原生回归)。
 
-CI 在 macOS 和 Windows 上运行 lint、类型检查、单元测试、原生数据库测试和 Electron E2E。两个 macOS runner 分别构建 ARM64 与 x64 DMG，再运行真实应用的签名回归与 DMG 检查；Windows 不运行这些 macOS 签名测试。发布工作流另包含 Windows x64 安装包构建与启动检查。自动化不代替经浏览器下载、Finder 首次打开及系统批准的人工验收。
+CI 在 macOS 和 Windows 上运行 lint、类型检查、单元测试、原生数据库测试和 Electron E2E。PR 更新只触发 PR 检查，`main` 更新触发主分支检查；同一 PR 或分支的新提交会取消旧运行。`main` 合并要求分支保持最新，且 GitHub Actions 的 `macos-latest`、`windows-2022` 检查均通过，管理员也受此限制；配置和维护命令见 [CI 与合并门槛](docs/ci.md)。发布工作流额外构建 Windows x64、macOS ARM64 和 macOS x64 安装包，但不替代人工验收。
 
 ## 架构与目录
 

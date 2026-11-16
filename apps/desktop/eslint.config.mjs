@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["out/**", "node_modules/**", "diagnostics/**", "electron.vite.config.*.mjs"],
+    ignores: ["out/**", "node_modules/**", "diagnostics/**", "resources/camera/mediapipe/vision_wasm_*", "electron.vite.config.*.mjs"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

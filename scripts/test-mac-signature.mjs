@@ -16,7 +16,7 @@ const copy = join(temporary, basename(app));
 try {
   await execFileAsync("/usr/bin/ditto", ["--rsrc", "--extattr", "--acl", "--qtn", app, copy], { timeout: 60_000 });
   await verifyMacSignature(copy);
-  const resource = "Contents/Resources/icons/trayTemplate.png";
+  const resource = "Contents/Resources/app.asar";
   await appendFile(join(copy, resource), "signature-regression-tamper");
   await assert.rejects(verifyMacSignature(copy), /codesign failed/, "Modified packaged resources must be rejected.");
   await copyFile(join(app, resource), join(copy, resource));
@@ -28,6 +28,8 @@ try {
     kind: "mac-signature-regression",
     appPath: app,
     originalSignatureValid: true,
+    cameraUsageDeclared: signature.cameraUsageDeclared,
+    cameraEntitlementVerified: signature.cameraEntitlementVerified,
     resourceTamperingRejected: true,
     nativeModuleTamperingRejected: nativeModule,
     gatekeeperApprovalTested: false,

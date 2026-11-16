@@ -20,8 +20,8 @@ export default async function signMac(options) {
     preAutoEntitlements: false,
     preEmbedProvisioningProfile: false,
     optionsForFile: (path) => ({
-      // Process bundles need V8 JIT and ad-hoc library loading. Libraries do not
-      // inherit osx-sign's default camera, microphone or other device grants.
+      // Process bundles need V8 JIT, ad-hoc library loading and opt-in camera
+      // capture. Libraries receive no device grants; microphone stays denied.
       entitlements: join(resources, path.endsWith(".app") ? "entitlements.mac.plist" : "entitlements.mac-library.plist"),
       hardenedRuntime: true,
       timestamp: "none",

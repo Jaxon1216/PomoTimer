@@ -38,6 +38,8 @@ const settings = {
   defaultBreakMode: "active",
   theme: "system",
   alwaysOnTop: false,
+  followWorkspaces: true,
+  autoFade: true,
   notificationsEnabled: true,
 };
 
@@ -113,6 +115,8 @@ try {
     };
     window.pomodoro = {
       getSnapshot: async () => makeSnapshot(duration()),
+      getCameraState: async () => ({ enabled: false, generation: 0 }),
+      reportCameraPresence: async () => makeSnapshot(duration()),
       command: async () => makeSnapshot(duration()),
       getSettings: async () => ({ ...initialSettings, focusDurationSeconds: duration() / 1000 }),
       updateSettings: async (patch) => ({ ...initialSettings, ...patch }),
@@ -147,10 +151,52 @@ try {
       assert.ok(Math.abs(result.topInset - result.bottomInset) <= 2, `${width}x${height}: compact group must be vertically centered`);
     }
     assert.match(result.text, /^\d{2,3}:\d{2}$/);
-    for (const name of ["打开统计", "更多操作", "开始计时", "跳到下一轮"]) {
+    const header = await page.locator(".titleActions .iconButton").evaluateAll((buttons) => buttons.map((button) => {
+      const rect = button.getBoundingClientRect();
+      return { label: button.getAttribute("aria-label"), left: rect.left, right: rect.right };
+    }));
+    assert.equal(header.length, 3, `${width}x${height}: all header actions remain visible`);
+    assert.ok(header[0].left >= 86 && header[0].right <= header[1].left && header[1].right <= header[2].left,
+      `${width}x${height}: sensing mode precedes statistics without overlapping native controls`);
+    if (width >= 320 && height >= 300) {
+      const segmentWidths = await page.locator(".roundSequence span").evaluateAll((segments) => segments.map((segment) => segment.getBoundingClientRect().width));
+      assert.ok(Math.abs(segmentWidths[0] / segmentWidths[1] - 6) < 0.1, "focus width reflects thirty versus five minutes");
+      assert.ok(Math.abs(segmentWidths[5] / segmentWidths[1] - 2) < 0.1, "long rest width reflects ten versus five minutes");
+    }
+    for (const name of ["感知模式：触控，切换为监控", "打开统计", "更多操作", "开始计时", "跳到下一轮"]) {
       await page.getByRole("button", { name, exact: true }).click({ trial: true });
     }
     await page.screenshot({ path: join(output, `timer-${width}x${height}.png`) });
+  }
+
+  for (const theme of ["light", "dark"]) {
+    await page.setViewportSize({ width: 160, height: 180 });
+    await page.goto(renderer);
+    await page.getByText("30:00", { exact: true }).waitFor();
+    await settle(page);
+    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
+    await page.mouse.move(100, 80);
+    await page.mouse.move(-5, -5);
+    await page.locator('.timerSurface[data-faded="true"]').waitFor();
+    const appearance = await page.locator(".timerSurface").evaluate((surface) => {
+      const opacity = (selector) => getComputedStyle(surface.querySelector(selector)).opacity;
+      return {
+        surfaceOpacity: getComputedStyle(surface).opacity,
+        background: getComputedStyle(surface).backgroundColor,
+        time: opacity("time"),
+        state: opacity(".statePill"),
+        primary: opacity(".timerControls .primary"),
+        total: opacity(".dialTotal"),
+      };
+    });
+    assert.equal(appearance.surfaceOpacity, "1", `${theme}: the window's contents must not fade as a group`);
+    assert.match(appearance.background, /(?:,\s*0\.78|\/\s*0\.78)\)$/, `${theme}: only the timer background becomes translucent`);
+    for (const key of ["time", "state", "primary"]) assert.equal(appearance[key], "1", `${theme}: ${key} remains clear`);
+    assert.equal(appearance.total, "0.4", `${theme}: auxiliary information is subdued`);
+    assert.equal((await geometry(page)).fits, true, `${theme}: faded minimum timer still fits the dial`);
+    await page.screenshot({ path: join(output, `timer-faded-${theme}-160x180.png`) });
+    await page.mouse.move(100, 80);
+    await page.locator('.timerSurface[data-faded="false"]').waitFor();
   }
 
   await page.goto(`${renderer}?duration=7200000`);

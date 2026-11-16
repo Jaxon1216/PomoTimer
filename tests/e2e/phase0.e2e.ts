@@ -266,16 +266,23 @@ test("starts through the restricted preload bridge and preserves native settings
   // A cold Windows runner can still be loading the renderer after the default
   // interactive assertion timeout; startup has its own bounded budget.
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible({ timeout: 15_000 });
+  expect(await window.evaluate(() => window.pomodoro.getSettings())).toMatchObject({
+    alwaysOnTop: true, followWorkspaces: true, autoFade: true,
+  });
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(true);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(process.platform === "darwin");
   await expect(window.locator("time")).toHaveText("30:00");
   await settleVisuals(window);
   await assertTimerLayout(window, "vertical");
   await expect.poll(() => window.locator("#root").evaluate((root) => [root.clientWidth, root.clientHeight])).toEqual([360, 478]);
   await window.screenshot({ path: testInfo.outputPath("timer-light.png") });
-  await window.getByRole("button", { name: "开始计时" }).click();
+  await window.getByRole("button", { name: "开始计时" }).focus();
+  await window.keyboard.press("Space");
   await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
-  await window.getByRole("button", { name: "暂停计时" }).click();
+  await window.keyboard.press("Space");
   await expect(window.getByRole("button", { name: "继续计时" })).toBeEnabled();
-  await window.getByRole("button", { name: "继续计时" }).click();
+  await window.keyboard.press("Space");
+  await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
   await openMore(window);
   await window.getByRole("menuitem", { name: "重新开始当前轮次" }).click();
   await expect(window.getByRole("button", { name: "开始计时" })).toBeEnabled();
@@ -302,7 +309,7 @@ test("starts through the restricted preload bridge and preserves native settings
     hasMainInspector: Reflect.has(globalThis, Symbol.for("pomodoro.desktop.inspect")),
   }));
   expect(bridgeShape.apiKeys).toEqual([
-    "command", "getCapabilities", "getSettings", "getSnapshot", "getStatistics", "subscribe", "updateSettings",
+    "command", "getCameraState", "getCapabilities", "getSettings", "getSnapshot", "getStatistics", "reportCameraPresence", "subscribe", "updateSettings",
   ]);
   expect(bridgeShape.hasNodeProcess).toBe(false);
   expect(bridgeShape.hasRequire).toBe(false);
@@ -312,6 +319,157 @@ test("starts through the restricted preload bridge and preserves native settings
   const restarted = await launchApplication(userDataDirectory);
   expect(await restarted.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(true);
   await restarted.close();
+});
+
+test("keeps the timer and independent settings while macOS desktop following replaces windows", async ({ launchApplication }, testInfo) => {
+  test.skip(process.platform !== "darwin", "macOS Spaces and panel replacement are platform-specific");
+  test.setTimeout(60_000);
+  const userDataDirectory = testInfo.outputPath("user-data");
+  const app = await launchApplication(userDataDirectory);
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  let window = await app.firstWindow();
+  await expect(window.getByRole("heading", { name: "专注" })).toBeVisible({ timeout: 15_000 });
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await expect(window.locator("time")).not.toHaveText("30:00");
+  await window.getByRole("button", { name: "暂停计时" }).click();
+  const paused = await window.evaluate(() => window.pomodoro.getSnapshot());
+  expect(paused.status).toBe("manual-paused");
+  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(320, 400); });
+
+  await openMore(window);
+  await window.getByRole("menuitem", { name: "打开设置" }).click();
+  await window.getByRole("checkbox", { name: "常驻顶部" }).uncheck();
+  await window.getByRole("checkbox", { name: "自动淡化" }).uncheck();
+  await window.getByRole("button", { name: "保存设置" }).click();
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(false);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(true);
+
+  for (const following of [false, true]) {
+    const oldWindow = window;
+    await window.getByRole("checkbox", { name: "跟随桌面与全屏" }).setChecked(following);
+    const replacement = app.waitForEvent("window");
+    await window.getByRole("button", { name: "保存设置" }).click();
+    window = await replacement;
+    await expect(window.getByRole("heading", { name: "设置" })).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => oldWindow.isClosed()).toBe(true);
+    await expect(window.getByRole("checkbox", { name: "跟随桌面与全屏" })).toBeChecked({ checked: following });
+    await expect(window.getByRole("checkbox", { name: "常驻顶部" })).not.toBeChecked();
+    await expect(window.getByRole("checkbox", { name: "自动淡化" })).not.toBeChecked();
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(following);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(false);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getContentSize())).toEqual([320, 400]);
+    expect(await app.evaluate(({ app }) => app.dock?.isVisible())).toBe(true);
+    expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+      status: paused.status, remainingMs: paused.remainingMs, round: paused.round,
+      automation: { manualPauseLocked: true },
+    });
+  }
+
+  const closed = window.waitForEvent("close");
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
+  await closed;
+  const reopened = app.waitForEvent("window");
+  await app.evaluate(({ app }) => { app.emit("activate"); });
+  window = await reopened;
+  await window.waitForFunction(() => Boolean(window.pomodoro));
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: paused.status, remainingMs: paused.remainingMs, round: paused.round,
+  });
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(true);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(false);
+  expect(await app.evaluate(({ app }) => app.dock?.isVisible())).toBe(true);
+  await app.close();
+
+  const restarted = await launchApplication(userDataDirectory);
+  const restoredWindow = await restarted.firstWindow();
+  await restoredWindow.waitForFunction(() => Boolean(window.pomodoro));
+  expect(await restoredWindow.evaluate(() => window.pomodoro.getSettings())).toMatchObject({
+    alwaysOnTop: false, followWorkspaces: true, autoFade: false,
+  });
+  expect(await restarted.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(true);
+  expect(await restarted.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop())).toBe(false);
+  expect(await restarted.evaluate(({ app }) => app.dock?.isVisible())).toBe(true);
+  await restarted.close();
+});
+
+test("fades timer chrome after leaving while retaining readable controls and native window opacity", async ({ launchApplication }, testInfo) => {
+  const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  const timer = window.locator(".timerSurface");
+  await expect(timer).toBeVisible({ timeout: 15_000 });
+  await settleVisuals(window);
+  const snapshot = await window.evaluate(() => window.pomodoro.getSnapshot());
+  await window.mouse.move(180, 180);
+  await expect(timer).toHaveAttribute("data-faded", "false");
+  await window.mouse.move(-8, -8);
+  await expect(timer).toHaveAttribute("data-faded", "true", { timeout: 4_000 });
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getOpacity())).toBe(1);
+  const opacity = await timer.evaluate((surface) => {
+    const read = (selector: string) => Number(getComputedStyle(surface.querySelector(selector)!).opacity);
+    return { time: read("time"), status: read(".statePill"), action: read(".timerControls .primary"), brand: read(".brand") };
+  });
+  expect(opacity).toMatchObject({ time: 1, status: 1, action: 1 });
+  expect(opacity.brand).toBeLessThan(1);
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: snapshot.status, remainingMs: snapshot.remainingMs, round: snapshot.round,
+  });
+  await window.mouse.move(180, 180);
+  await expect(timer).toHaveAttribute("data-faded", "false");
+  await window.getByRole("button", { name: "打开统计" }).click();
+  await expect(window.getByRole("heading", { name: "统计" })).toBeVisible();
+  await expect(window.locator("[data-faded]")).toHaveCount(0);
+  await app.close();
+});
+
+test("retains the working window when macOS replacement fails to load and retries the saved preference", async ({ launchApplication }, testInfo) => {
+  test.skip(process.platform !== "darwin", "Only macOS replaces its native window when desktop following changes");
+  const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  await expect(window.getByRole("heading", { name: "专注" })).toBeVisible({ timeout: 15_000 });
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await window.getByRole("button", { name: "暂停计时" }).click();
+  const paused = await window.evaluate(() => window.pomodoro.getSnapshot());
+  await openMore(window);
+  await window.getByRole("menuitem", { name: "打开设置" }).click();
+  await window.evaluate(() => {
+    window.pomodoro.subscribe((event) => {
+      if (event.type === "core.error" && event.code === "WINDOW_REPLACEMENT_FAILED") Reflect.set(globalThis, "replacementError", event);
+    });
+  });
+  await app.evaluate(({ BrowserWindow }) => {
+    const loadURL = BrowserWindow.prototype.loadURL;
+    BrowserWindow.prototype.loadURL = function () {
+      BrowserWindow.prototype.loadURL = loadURL;
+      return Promise.reject(new Error("Injected replacement page load failure"));
+    };
+  });
+  await window.getByRole("checkbox", { name: "跟随桌面与全屏" }).uncheck();
+  await window.getByRole("button", { name: "保存设置" }).click();
+  await expect(window.getByText("窗口切换未完成，已保留原窗口。请重试保存设置或重新打开窗口。", { exact: true })).toBeVisible();
+  expect(window.isClosed()).toBe(false);
+  expect(await window.evaluate(() => Reflect.get(globalThis, "replacementError"))).toMatchObject({
+    type: "core.error", code: "WINDOW_REPLACEMENT_FAILED", recoverable: true,
+  });
+  expect(await window.evaluate(() => window.pomodoro.getSettings())).toMatchObject({ followWorkspaces: false });
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: paused.status, remainingMs: paused.remainingMs, round: paused.round,
+  });
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  expect(await app.evaluate(({ app }) => app.dock?.isVisible())).toBe(true);
+
+  const replacement = app.waitForEvent("window");
+  await window.getByRole("button", { name: "保存设置" }).click();
+  const retriedWindow = await replacement;
+  await expect(retriedWindow.getByRole("heading", { name: "设置" })).toBeVisible({ timeout: 15_000 });
+  await expect.poll(() => window.isClosed()).toBe(true);
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisibleOnAllWorkspaces())).toBe(false);
+  expect(await retriedWindow.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: paused.status, remainingMs: paused.remainingMs, round: paused.round,
+  });
+  await app.close();
 });
 
 test("limits tall windows while keeping short and wide timer layouts available", async ({ launchApplication, windowsHitTestExecutable }, testInfo) => {
@@ -460,7 +618,7 @@ test("keeps long durations, break states, and input failure readable in each sup
   await window.getByRole("button", { name: "跳到下一轮" }).click();
   await window.getByRole("button", { name: "跳到下一轮" }).click();
   await expect(window.getByRole("heading", { name: "长休" })).toBeVisible();
-  await expect(window.getByText("等待离席 · 将自动开始", { exact: true })).toBeVisible();
+  await expect(window.getByText("无输入 600 秒开始休息", { exact: true })).toBeVisible();
   await expect(window.getByRole("button", { name: "手动开始休息" })).toBeEnabled();
   await checkLayouts("long-break-waiting");
 
@@ -478,13 +636,13 @@ test("keeps long durations, break states, and input failure readable in each sup
   await app.close();
 });
 
-test("starts active and desk breaks automatically after the input threshold and keeps manual pause locked", async ({ launchApplication }, testInfo) => {
+test("starts active and desk breaks automatically even after a manual break pause", async ({ launchApplication }, testInfo) => {
   const app = await launchApplication(testInfo.outputPath("user-data"));
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
   await expect(window.locator("time")).toHaveText("30:00");
   await window.getByRole("button", { name: "跳到下一轮" }).click();
-  await expect(window.getByText("等待离席 · 将自动开始", { exact: true })).toBeVisible();
+  await expect(window.getByText("无输入 40 秒开始休息", { exact: true })).toBeVisible();
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 120; });
   await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled({ timeout: 4_000 });
   await expect(window.getByText("休息中", { exact: true })).toBeVisible();
@@ -497,13 +655,14 @@ test("starts active and desk breaks automatically after the input threshold and 
   const manualPause = await window.evaluate(() => window.pomodoro.getSnapshot());
   await window.waitForTimeout(1200);
   const stillPaused = await window.evaluate(() => window.pomodoro.getSnapshot());
-  expect(stillPaused.status).toBe("manual-paused");
-  expect(stillPaused.remainingMs).toBe(manualPause.remainingMs);
+  expect(stillPaused.status).toBe("running");
+  expect(stillPaused.automation.manualPauseLocked).toBe(false);
+  expect(stillPaused.remainingMs).toBeLessThanOrEqual(manualPause.remainingMs);
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   await window.evaluate(() => window.pomodoro.updateSettings({ defaultBreakMode: "desk" }));
   await window.getByRole("button", { name: "跳到下一轮" }).click();
   await window.getByRole("button", { name: "跳到下一轮" }).click();
-  await expect(window.getByText("等待无输入 · 将自动开始", { exact: true })).toBeVisible();
+  await expect(window.getByText("无输入 40 秒开始休息", { exact: true })).toBeVisible();
   await expect(window.getByRole("button", { name: "手动开始休息" })).toBeEnabled();
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 120; });
   await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled({ timeout: 4_000 });
@@ -514,80 +673,51 @@ test("starts active and desk breaks automatically after the input threshold and 
   await app.close();
 });
 
-test("confirms only the observed break countdown and discards it after renewed input", async ({ launchApplication }, testInfo) => {
+test("shows the final ten seconds of preparation, resets on input, and starts a full break", async ({ launchApplication }, testInfo) => {
   const app = await launchApplication(testInfo.outputPath("user-data"));
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
   const window = await app.firstWindow();
   await expect(window.locator("time")).toHaveText("30:00");
-  // A 10-second threshold starts the provisional window at zero, so the real
-  // Main polling loop can observe a short countdown without a 40-second wait.
-  await window.evaluate(() => window.pomodoro.updateSettings({ inputIdleThresholdSeconds: 10 }));
   await window.getByRole("button", { name: "跳到下一轮" }).click();
+  const setIdle = async (seconds: number) => {
+    await app.evaluate(({ powerMonitor }, seconds) => { powerMonitor.getSystemIdleTime = () => seconds; }, seconds);
+    await waitForInputSamples(app, 1);
+  };
+  await setIdle(0);
+  await expect(window.locator(".statePill")).toContainText("无输入 40 秒");
+  await setIdle(29);
+  const before = await window.evaluate(() => window.pomodoro.getSnapshot());
+  expect(before.automation.breakPreparation).toEqual({ remainingSeconds: 11, countdown: false });
+  await expect(window.locator(".statePill")).toContainText("无输入 40 秒");
+  await setIdle(30);
+  await expect(window.locator(".statePill")).toContainText("10 秒后");
   await expect(window.locator("time")).toHaveText("05:00");
-  await app.evaluate(({ powerMonitor }) => new Promise<void>((resolve) => {
-    const startedAt = performance.now();
-    let firstSample = true;
-    powerMonitor.getSystemIdleTime = () => {
-      if (firstSample) {
-        firstSample = false;
-        resolve();
-      }
-      return Math.floor((performance.now() - startedAt) / 1000);
-    };
-  }));
-  const firstSample = await window.evaluate(() => window.pomodoro.getSnapshot());
-  expect(firstSample.status).toBe("auto-paused");
-  await waitForInputSamples(app, 3);
-  const unconfirmed = await window.evaluate(() => window.pomodoro.getSnapshot());
-  expect(unconfirmed.status).toBe("auto-paused");
-  expect(unconfirmed.remainingMs).toBe(unconfirmed.round.totalDurationMs);
-  await expect(window.locator("time")).toHaveText("05:00");
-
-  const confirmedEvent = window.evaluate(() => new Promise<TimerSnapshot>((resolve) => {
+  await setIdle(35);
+  await expect(window.locator(".statePill")).toContainText("5 秒后");
+  await window.screenshot({ path: testInfo.outputPath("break-preparation.png") });
+  await setIdle(0);
+  await expect(window.locator(".statePill")).toContainText("无输入 40 秒");
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).remainingMs).toBe(300_000);
+  await setIdle(39);
+  await expect(window.locator(".statePill")).toContainText("1 秒后");
+  const runningEvent = window.evaluate(() => new Promise<TimerSnapshot>((resolve) => {
     const unsubscribe = window.pomodoro.subscribe((event) => {
-      if (event.type === "timer.snapshot" && event.snapshot.status === "running") {
-        unsubscribe();
-        resolve(event.snapshot);
-      }
+      if (event.type === "timer.snapshot" && event.snapshot.status === "running") { unsubscribe(); resolve(event.snapshot); }
     });
   }));
-  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 10; });
-  const confirmed = await confirmedEvent;
-  const observedCountdown = unconfirmed.remainingMs - confirmed.remainingMs;
-  expect(observedCountdown).toBeGreaterThan(2_500);
-  expect(observedCountdown, "Confirmation must not invent the unobserved 10-second idle history").toBeLessThan(5_000);
-  await expect(window.locator("time")).toHaveText(/^04:5\d$/);
-  await expect(window.getByText("休息中", { exact: true })).toBeVisible();
-
-  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
-  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).status, {
-    intervals: [50], timeout: 4_000,
-  }).toBe("auto-paused");
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 40; });
+  const started = await runningEvent;
+  expect(started.remainingMs).toBe(300_000);
+  expect(started.automation.breakPreparation).toBeNull();
+  await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
+  await setIdle(0);
   const paused = await window.evaluate(() => window.pomodoro.getSnapshot());
-  await waitForInputSamples(app, 1);
-  const stillPaused = await window.evaluate(() => window.pomodoro.getSnapshot());
-  expect(stillPaused.status).toBe("auto-paused");
-  expect(stillPaused.remainingMs).toBe(paused.remainingMs);
   await resizeContent(app, window, 160, 180);
   await assertTimerLayout(window);
-  await expect(window.getByText("有输入 · 休息暂停", { exact: true })).toBeVisible();
-  await expect(window.getByRole("button", { name: "继续计时" })).toBeInViewport();
+  await expect(window.locator(".statePill")).toContainText("无输入 40 秒");
   await window.screenshot({ path: testInfo.outputPath("drag-minimum-interrupted-break.png") });
-
-  const restartedEvent = window.evaluate(() => new Promise<TimerSnapshot>((resolve) => {
-    const unsubscribe = window.pomodoro.subscribe((event) => {
-      if (event.type === "timer.snapshot" && event.snapshot.status === "running") {
-        unsubscribe();
-        resolve(event.snapshot);
-      }
-    });
-  }));
-  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 10; });
-  const restarted = await restartedEvent;
-  const newCountdown = stillPaused.remainingMs - restarted.remainingMs;
-  expect(newCountdown).toBeGreaterThanOrEqual(0);
-  expect(newCountdown, "Renewed input must discard the old observed countdown").toBeLessThan(1_500);
-  await expect(window.getByRole("button", { name: "暂停计时" })).toBeEnabled();
+  await setIdle(0);
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).remainingMs).toBe(paused.remainingMs);
   await app.close();
 });
 
@@ -605,10 +735,10 @@ test("opens settings and statistics at the minimum size and preserves scrollable
       };
     });
   }
-  const expectWindowsCaption = async (color: string, background: string) => {
+  const expectSettingsTheme = async (color: string, background: string) => {
+    await expect(window.locator(".pageSurface")).toHaveCSS("background-color", background);
     if (process.platform !== "win32") return;
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => Reflect.get(BrowserWindow.getAllWindows()[0]!, "lastTestCaptionColor"))).toBe(color);
-    await expect(window.locator("body")).toHaveCSS("background-color", background);
   };
   await expect(window.locator("time")).toHaveText("30:00");
   await resizeContent(app, window, 160, 180);
@@ -625,22 +755,23 @@ test("opens settings and statistics at the minimum size and preserves scrollable
   await window.getByRole("button", { name: "保存设置" }).click();
   await expect(window.getByText("已保存")).toBeVisible();
   await expect(window.locator("html")).toHaveAttribute("data-theme", "light");
-  await expectWindowsCaption("#f4f1eb", "rgb(244, 241, 235)");
+  await expectSettingsTheme("#f4f1eb", "rgb(244, 241, 235)");
   await window.getByRole("button", { name: "深色" }).click();
   await window.getByRole("button", { name: "保存设置" }).click();
+  await expect(window.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(window.locator("html")).toHaveClass(/dark/);
-  await expectWindowsCaption("#252b39", "rgb(37, 43, 57)");
+  await expectSettingsTheme("#252b39", "rgb(37, 43, 57)");
   await window.getByRole("button", { name: "跟随系统" }).click();
   await window.emulateMedia({ colorScheme: "dark" });
   if (process.platform === "win32") await app.evaluate(({ nativeTheme }) => { nativeTheme.themeSource = "dark"; });
   await window.getByRole("button", { name: "保存设置" }).click();
   await expect(window.locator("html")).toHaveAttribute("data-theme", "system");
   await expect(window.locator("html")).toHaveClass(/dark/);
-  await expectWindowsCaption("#252b39", "rgb(37, 43, 57)");
+  await expectSettingsTheme("#252b39", "rgb(37, 43, 57)");
   await window.emulateMedia({ colorScheme: "light" });
   if (process.platform === "win32") await app.evaluate(({ nativeTheme }) => { nativeTheme.themeSource = "light"; });
   await expect(window.locator("html")).not.toHaveClass(/dark/);
-  await expectWindowsCaption("#f4f1eb", "rgb(244, 241, 235)");
+  await expectSettingsTheme("#f4f1eb", "rgb(244, 241, 235)");
   await window.getByRole("button", { name: /计时器/ }).click();
   await expect(window.getByRole("heading", { name: "专注" })).toBeVisible();
   await window.getByRole("button", { name: "打开统计" }).click();
@@ -788,6 +919,22 @@ test("publishes committed statistics while the statistics page stays open", asyn
   expect((await window.evaluate(() => window.pomodoro.getStatistics())).today.completedFocusRounds).toBe(1);
   await expect(window.locator(".heatmap")).toBeVisible();
   await expect.poll(() => window.locator(".heatmapFrame").evaluate((frame) => frame.scrollLeft)).toBeGreaterThan(0);
+});
+
+test("keeps input timing frozen during suspend until resume and a fresh sample", async ({ launchApplication }, testInfo) => {
+  const app = await launchApplication(testInfo.outputPath("user-data"));
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
+  const window = await app.firstWindow();
+  await window.getByRole("button", { name: "开始计时" }).click();
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.emit("suspend"); });
+  const suspended = await window.evaluate(() => window.pomodoro.getSnapshot());
+  expect(suspended.status).toBe("auto-paused");
+  await app.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 1_200)));
+  const waiting = await window.evaluate(() => window.pomodoro.getSnapshot());
+  expect(waiting.remainingMs).toBe(suspended.remainingMs);
+  expect(waiting.status).toBe("auto-paused");
+  await app.evaluate(({ powerMonitor }) => { powerMonitor.emit("resume"); });
+  await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).status).toBe("running");
 });
 
 test("a runtime SQLite failure freezes the core and remains visible after renderer reload", async ({ launchApplication }, testInfo) => {
