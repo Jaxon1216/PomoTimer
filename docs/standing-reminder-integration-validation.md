@@ -27,7 +27,8 @@
 | `npm run test:store` | 38 项真实 SQLite 检查通过；1 分钟专注与大站设置、恢复和检查点隐私均保留。 |
 | `npm run build` | 通过；输出主页面、提醒页面及两个自包含 preload。 |
 | 联合 Electron 用例 | 1/1 通过；专注完成卡片未确认时进入大站，大站自然完成更新同一卡片，摄像头恢复新代次，专注统计仍只增加一次。 |
-| 全量 Electron 回归 | 重跑中，最终结果随后补充。 |
+| 全量 Electron 回归 | 完整诊断曾 32/32 通过；最终移除诊断后的回归等待 Mac 解锁。具体异常与证据见下文。 |
+| ARM64 打包与静态核对 | 本地版本 `0.1.0-beta.3-standing-reminder.52a3194` 构建成功；应用完整签名及 DMG 校验通过；ASAR 同时含提醒页面、独立 preload、提醒 IPC 和大站命令。 |
 
 全量前两轮为 31/32、30/32。既有缩放用例的几何检查通过，但读取到意外的手动暂停；第二轮另有长时长设置／切轮断言失败。trace 未能确定额外操作的来源，不能据此声称已找到根因。未修改产品实现或放宽断言：缩放用例独立连续复跑 5/5、相关三个用例按序连续复跑 9/9 通过，随后继续完整序列诊断，最终结果补充在上表。
 
@@ -35,8 +36,17 @@
 
 ## 本机安装交付
 
-待联合源码回归完成后，为本次合并提交生成带版本标识的 ARM64 DMG；在最终包中重跑完成提醒与大站联合场景，检查 ASAR 同时包含两项功能，再替换 `/Applications/Pomodoro Timer.app`。替换前正常退出并备份现有 SQLite/WAL/SHM，旧软件与旧安装包移到废纸篓。实际版本、哈希与交付结果在执行后补充。
+源码整合提交：`52a31946ce5b7b4f106f20ba86a409c9275a32e6`（父提交为此前大站记录 `93fd020` 与主线合并 `9832a21`）。本地构建通过 `extraMetadata.version` 标记版本，不修改源码包版本，不创建发布 tag。
+
+| 产物 | SHA-256 |
+| --- | --- |
+| `apps/desktop/dist/Pomodot-0.1.0-beta.3-standing-reminder.52a3194-mac-arm64.dmg` | `f12baedd7646fada535b60f0f66ea8f22a1312b34834c9e03e02431360daa7b4` |
+| `apps/desktop/dist/mac-arm64/Pomodoro Timer.app/Contents/Resources/app.asar` | `6eda98e91096f04283dc5d8fc7ca28e02f6ad4359788d89cd107d05d3e602033` |
+
+旧的 `apps/desktop/dist` 已移到 `~/.Trash/Pomodot-old-packages-6r8y5q03`，没有清空废纸篓。CUA 正常退出旧安装应用时返回 Mac 已锁屏；已请求用户手动解锁。当前 `/Applications/Pomodoro Timer.app` 仍为 `0.1.0-beta.3-standing.dbbb634`，尚未替换，现有用户数据未修改。
+
+待解锁后运行最终全量 Electron 回归、最终 DMG 复制安装冒烟与实包提醒／大站联合场景；然后正常退出旧应用，备份现有 SQLite/WAL/SHM，替换应用并核对历史记录保留。实际交付结果在执行后补充。
 
 ## 接续位置
 
-远端 `main` 已包含 PR #10；大站源码整合位于 `codex/standing-break`。当前继续完整 Electron 回归与本地安装交付，不将主线合并等同于本机应用已更新。
+远端 `main` 已包含 PR #10；大站源码整合位于 `codex/standing-break` 的 `52a3194`。解锁后先正常退出旧安装应用，再在 `apps/desktop` 运行 `npx playwright test --output=/tmp/pomodot-standing-reminder-final`；通过后运行 `node scripts/smoke-mac-dmg.mjs <上述 DMG>`，将 `POMODORO_REMINDER_EXECUTABLE` 指向最终产物执行 `completion-reminder.e2e.ts`，最后按已有忽略目录中的安装备份流程替换。本机应用更新完成前不将主线合并等同于安装交付。
