@@ -45,6 +45,16 @@ describe("standing break IPC boundaries", () => {
   });
 });
 
+describe("focus duration settings", () => {
+  it.each([60, 240, 7200])("accepts a focus duration of %s seconds", (focusDurationSeconds) => {
+    expect(settingsPatchSchema.parse({ focusDurationSeconds })).toEqual({ focusDurationSeconds });
+  });
+
+  it.each([0, 59, 60.5, 7201])("rejects an out-of-range or fractional focus duration of %s seconds", (focusDurationSeconds) => {
+    expect(settingsPatchSchema.safeParse({ focusDurationSeconds }).success).toBe(false);
+  });
+});
+
 describe("camera IPC boundaries", () => {
   it("rejects frame data and unknown fields instead of forwarding them to Main", () => {
     expect(cameraPresenceReportSchema.safeParse({ presence: "present", generation: 1, frame: "pixels" }).success).toBe(false);

@@ -76,6 +76,89 @@ function observeIdle(engine: TimerEngine, clock: FakeClock, firstSecond: number,
 }
 
 describe("TimerEngine", () => {
+  describe("standing and completion-reminder integration", () => {
+    it.each([
+      { name: "twice the configured rest", shortOverride: null, longOverride: null, shortMs: 120_000, longMs: 240_000 },
+      { name: "independent custom durations", shortOverride: 180, longOverride: 300, shortMs: 180_000, longMs: 300_000 },
+    ])("completes one-minute focus and standing short/long rest with $name", ({ shortOverride, longOverride, shortMs, longMs }) => {
+      const store = new FakeStore();
+      const clock = new FakeClock();
+      store.settings = { ...defaultSettings, focusDurationSeconds: 60, shortBreakDurationSeconds: 60,
+        longBreakDurationSeconds: 120, focusRoundsPerCycle: 2,
+        standingShortBreakDurationSeconds: shortOverride, standingLongBreakDurationSeconds: longOverride };
+      const engine = new TimerEngine(store, clock);
+      const completedKinds: string[] = [];
+
+      for (const [index, breakKind, standingMs] of [[0, "short-break", shortMs], [1, "long-break", longMs]] as const) {
+        expect(engine.snapshot).toMatchObject({ status: "idle", remainingMs: 60_000,
+          round: { kind: "focus", hasStarted: false } });
+        engine.command("start");
+        clock.advance(60_000);
+        const prepared = engine.snapshot;
+        expect(prepared).toMatchObject({ status: "auto-paused", round: { kind: breakKind, hasStarted: false } });
+        expect(engine.completedRound).toEqual({ revision: index * 2 + 1, completedKind: "focus", nextKind: breakKind,
+          completedAt: clock.date.toISOString() });
+        completedKinds.push(engine.completedRound!.completedKind);
+        expect(store.sessions).toHaveLength(index + 1);
+
+        expect(engine.command("start-standing-break")).toMatchObject({ status: "running", remainingMs: standingMs,
+          round: { kind: breakKind, breakMode: "standing", hasStarted: true },
+          automation: { activePresenceSource: "none", manualPauseLocked: false } });
+        expect(engine.completedRoundsRevision).toBe(index * 2 + 1);
+        clock.advance(standingMs);
+        expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null, hasStarted: false } });
+        const completed = engine.completedRound;
+        expect(completed).toEqual({ revision: index * 2 + 2, completedKind: breakKind, nextKind: "focus",
+          completedAt: clock.date.toISOString() });
+        completedKinds.push(completed!.completedKind);
+        expect(engine.snapshot.round.kind).toBe("focus");
+        expect(engine.completedRound).toEqual(completed);
+        expect(engine.completedRoundsRevision).toBe(index * 2 + 2);
+        expect(store.sessions).toHaveLength(index + 1);
+      }
+
+      expect(completedKinds).toEqual(["focus", "short-break", "focus", "long-break"]);
+      expect(store.sessions.map((session) => session.activeDurationSeconds)).toEqual([60, 60]);
+      expect(engine.snapshot.round.cycleNumber).toBe(2);
+      expect(store.snapshot).not.toHaveProperty("completedRound");
+    });
+
+    it.each(["short-break", "long-break"] as const)("publishes standing %s completion once only after a successful persistence retry", (breakKind) => {
+      const store = new FakeStore();
+      const clock = new FakeClock();
+      store.settings = { ...defaultSettings, focusDurationSeconds: 60, shortBreakDurationSeconds: 60,
+        longBreakDurationSeconds: 60, focusRoundsPerCycle: breakKind === "short-break" ? 2 : 1 };
+      const engine = new TimerEngine(store, clock);
+      engine.command("start");
+      clock.advance(60_000);
+      expect(engine.snapshot.round.kind).toBe(breakKind);
+      const previousCompletion = engine.completedRound;
+      expect(previousCompletion).toMatchObject({ revision: 1, completedKind: "focus", nextKind: breakKind });
+      engine.command("start-standing-break");
+      clock.advance(120_000);
+      store.failSnapshot = true;
+
+      expect(() => engine.snapshot).toThrow("snapshot failed");
+      expect(engine.completedRound).toEqual(previousCompletion);
+      expect(engine.completedRoundsRevision).toBe(1);
+      expect(store.snapshot?.round).toMatchObject({ kind: breakKind, breakMode: "standing", hasStarted: true });
+      expect(store.sessions).toHaveLength(1);
+
+      store.failSnapshot = false;
+      expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null, hasStarted: false } });
+      const completion = { revision: 2, completedKind: breakKind, nextKind: "focus", completedAt: clock.date.toISOString() };
+      expect(engine.completedRound).toEqual(completion);
+      expect(engine.completedRoundsRevision).toBe(2);
+      engine.inputSample(0);
+      engine.command("next");
+      engine.command("reset");
+      expect(engine.completedRound).toEqual(completion);
+      expect(engine.completedRoundsRevision).toBe(2);
+      expect(store.sessions).toHaveLength(1);
+      expect(store.snapshot).not.toHaveProperty("completedRound");
+    });
+  });
+
   describe("manual standing breaks", () => {
     it.each(["input", "camera"] as const)("starts only from a fresh %s break preparation and keeps the cycle position", (source) => {
       const { engine, clock, store } = create();
@@ -797,6 +880,117 @@ describe("TimerEngine", () => {
     expect(engine.completedRoundsRevision).toBe(2);
   });
 
+  describe("committed completion metadata", () => {
+    it.each([
+      { completedKind: "focus", skippedRounds: 0, nextKind: "short-break" },
+      { completedKind: "short-break", skippedRounds: 1, nextKind: "focus" },
+      { completedKind: "focus", skippedRounds: 4, nextKind: "long-break" },
+      { completedKind: "long-break", skippedRounds: 5, nextKind: "focus" },
+    ] as const)("publishes $completedKind → $nextKind only after natural completion", ({ completedKind, skippedRounds, nextKind }) => {
+      const { engine, clock, store } = create();
+      for (let round = 0; round < skippedRounds; round += 1) engine.command("next");
+      const duration = engine.snapshot.remainingMs;
+      engine.command("start");
+      clock.advance(duration);
+
+      expect(engine.completedRound).toBeUndefined();
+      expect(engine.completedRoundsRevision).toBe(0);
+      expect(store.sessions).toHaveLength(0);
+      expect(engine.snapshot.round.kind).toBe(nextKind);
+      expect(engine.completedRound).toEqual({
+        revision: 1,
+        completedKind,
+        nextKind,
+        completedAt: clock.date.toISOString(),
+      });
+      if (completedKind === "focus") expect(engine.completedRound?.completedAt).toBe(store.sessions[0]?.completedAt);
+      expect(engine.completedRound).not.toBe(engine.completedRound);
+      expect(store.snapshot).not.toHaveProperty("completedRound");
+    });
+
+    it("keeps the latest committed metadata through skip and reset without creating new completions", () => {
+      const { engine, clock } = create();
+      engine.command("next");
+      engine.command("reset");
+      expect(engine.completedRound).toBeUndefined();
+      expect(engine.completedRoundsRevision).toBe(0);
+
+      engine.command("start");
+      clock.advance(defaultSettings.shortBreakDurationSeconds * 1000);
+      expect(engine.snapshot.round.kind).toBe("focus");
+      const completion = engine.completedRound;
+      expect(completion).toBeDefined();
+      engine.command("next");
+      engine.command("reset");
+      expect(engine.completedRound).toEqual(completion);
+      expect(engine.completedRoundsRevision).toBe(1);
+    });
+
+    it("does not recover completion metadata or count offline time after restart", () => {
+      const { engine, clock, store } = create();
+      engine.command("start");
+      clock.advance(defaultSettings.focusDurationSeconds * 1000);
+      expect(engine.snapshot.round.kind).toBe("short-break");
+      expect(engine.completedRound?.revision).toBe(1);
+      engine.command("start");
+      clock.advance(defaultSettings.shortBreakDurationSeconds * 1000);
+
+      const restored = new TimerEngine(store, clock);
+      expect(restored.snapshot.round.kind).toBe("short-break");
+      expect(restored.snapshot.status).toBe("auto-paused");
+      expect(restored.completedRound).toBeUndefined();
+      expect(restored.completedRoundsRevision).toBe(0);
+    });
+
+    it.each([
+      { completedKind: "focus", skippedRounds: 0, failure: "failCommit", message: "commit failed" },
+      { completedKind: "short-break", skippedRounds: 1, failure: "failSnapshot", message: "snapshot failed" },
+      { completedKind: "long-break", skippedRounds: 5, failure: "failSnapshot", message: "snapshot failed" },
+    ] as const)("publishes a failed $completedKind completion exactly once after a successful retry", ({ completedKind, skippedRounds, failure, message }) => {
+      const { engine, clock, store } = create();
+      for (let round = 0; round < skippedRounds; round += 1) engine.command("next");
+      const duration = engine.snapshot.remainingMs;
+      engine.command("start");
+      store[failure] = true;
+      clock.advance(duration);
+
+      expect(() => engine.snapshot).toThrow(message);
+      expect(engine.completedRound).toBeUndefined();
+      expect(engine.completedRoundsRevision).toBe(0);
+      expect(store.sessions).toHaveLength(0);
+      expect(store.snapshot?.round.kind).toBe(completedKind);
+
+      store[failure] = false;
+      const nextKind = engine.snapshot.round.kind;
+      const completion = { revision: 1, completedKind, nextKind, completedAt: clock.date.toISOString() };
+      expect(engine.completedRound).toEqual(completion);
+      expect(engine.completedRoundsRevision).toBe(1);
+      expect(engine.snapshot.round.kind).toBe(nextKind);
+      expect(engine.completedRound).toEqual(completion);
+      expect(engine.completedRoundsRevision).toBe(1);
+      expect(store.sessions).toHaveLength(completedKind === "focus" ? 1 : 0);
+    });
+
+    it("retains the previous completion while the next completion cannot be persisted", () => {
+      const { engine, clock, store } = create();
+      engine.command("start");
+      clock.advance(defaultSettings.focusDurationSeconds * 1000);
+      expect(engine.snapshot.round.kind).toBe("short-break");
+      const firstCompletion = engine.completedRound;
+      engine.command("start");
+      clock.advance(defaultSettings.shortBreakDurationSeconds * 1000);
+      store.failSnapshot = true;
+
+      expect(() => engine.snapshot).toThrow("snapshot failed");
+      expect(engine.completedRound).toEqual(firstCompletion);
+      expect(engine.completedRoundsRevision).toBe(1);
+      store.failSnapshot = false;
+      expect(engine.snapshot.round.kind).toBe("focus");
+      expect(engine.completedRound).toMatchObject({ revision: 2, completedKind: "short-break", nextKind: "focus" });
+      expect(engine.completedRoundsRevision).toBe(2);
+    });
+  });
+
   it("finishes focus into a full automatically paused break without counting waiting time", () => {
     const { engine, clock } = create();
     engine.command("start");
@@ -1032,6 +1226,39 @@ describe("TimerEngine", () => {
     expect(restored.snapshot.round.kind).toBe("focus");
     expect(restored.snapshot.round.focusRoundNumber).toBe(1);
     expect(restored.snapshot.activeCycleRounds).toBe(1);
+  });
+
+  it("applies a one-minute focus to the next round and completes once after sixty active seconds", () => {
+    const { engine, clock, store } = create();
+    engine.command("start");
+    clock.advance(5_000);
+    engine.applySettings({ focusDurationSeconds: 60 });
+    expect(engine.snapshot.round.totalDurationMs).toBe(defaultSettings.focusDurationSeconds * 1000);
+    expect(engine.snapshot.remainingMs).toBe(defaultSettings.focusDurationSeconds * 1000 - 5_000);
+
+    engine.command("next");
+    const nextFocus = engine.command("next");
+    expect(nextFocus.round.kind).toBe("focus");
+    expect(nextFocus.remainingMs).toBe(60_000);
+    expect(nextFocus.round.totalDurationMs).toBe(60_000);
+    engine.command("start");
+    clock.advance(20_000);
+    expect(engine.command("pause").remainingMs).toBe(40_000);
+    clock.advance(60_000);
+    expect(engine.inputSample(0).remainingMs).toBe(40_000);
+    expect(engine.snapshot.status).toBe("manual-paused");
+    engine.command("resume");
+    clock.advance(39_999);
+    expect(engine.snapshot.remainingMs).toBe(1);
+    expect(store.sessions).toHaveLength(0);
+    clock.advance(1);
+    expect(engine.snapshot.round.kind).toBe("short-break");
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0]).toMatchObject({ plannedDurationSeconds: 60, activeDurationSeconds: 60 });
+    expect(engine.completedRoundsRevision).toBe(1);
+    expect(engine.snapshot.round.kind).toBe("short-break");
+    expect(store.sessions).toHaveLength(1);
+    expect(engine.completedRoundsRevision).toBe(1);
   });
 
   it("restores a running snapshot as a safe automatic pause", () => {

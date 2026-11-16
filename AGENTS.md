@@ -19,6 +19,7 @@ scripts/        development, verification, packaging, and release helpers
 - React owns presentation, navigation, and ephemeral UI state. It never owns authoritative time or persistence.
 - Preload exposes only the typed `window.pomodoro` allowlist. It never exposes `ipcRenderer`, Node, paths, SQLite, or generic channels.
 - Main owns windows, tray, notifications, `powerMonitor`, suspend/resume, IPC validation, and the only `TimerEngine` instance.
+- Completion cards use an independent window, session, and self-contained preload that only reads/subscribes to reminders and confirms the current reminder ID. They never expose timer commands, settings, statistics, or camera access.
 - `apps/desktop/src/main/timer.ts` is Electron-independent deterministic business logic and is the timer authority.
 - `apps/desktop/src/main/store.ts` is the only SQLite access layer. Renderer and preload never open the database.
 
@@ -33,6 +34,7 @@ scripts/        development, verification, packaging, and release helpers
 - Automatic pause never decrements time. Manual pause locks automatic resume only during focus, until the user presses continue. Active/desk breaks remain eligible for automatic start/resume whether or not the user pressed pause. Standing breaks use manual start/resume without a focus pause lock; sleep, lock and restart still freeze progress.
 - Offer standing only during an ordinary break's first preparation period. Persist `round.hasStarted` as progress so pausing or restarting a begun break cannot reopen the option; explicit reset begins a fresh preparation period. Never accept standing as `defaultBreakMode`. Temporarily release the camera for a standing round, preserve the selected source, and restart with a fresh generation when a later round needs it.
 - Sleep and restart turn an active round into `auto-paused`; offline time never counts. Normalize legacy manually paused breaks to automatic waiting without changing their remaining time; preserve focus pause locks.
+- Show a silent persistent completion card only after natural round completion is successfully persisted, including standing breaks. Skips, resets, failed commits and restart do not produce cards. Display never steals keyboard focus or blocks the next round; confirmation only dismisses the matching reminder.
 
 ## Engineering rules
 

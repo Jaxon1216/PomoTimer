@@ -3,13 +3,16 @@
 当前链路是：
 
 ```text
-React -> preload -> Main IPC -> TimerEngine -> SqliteStore
-                           \-> Tray / Notification / event broadcast
+主窗口 React -> 主窗口 preload -> Main IPC -> TimerEngine -> SqliteStore
+                                       \-> publishSnapshot
+                                           |-> syncCamera -> camera.state
+                                           |-> timer.snapshot / Tray / stats.changed
+                                           \-> CompletionReminders -> 专用 preload -> 提醒 React
 ```
 
 启动时 Main 先取得单实例锁，再打开 `app.getPath("userData")/pomodoro.sqlite`、执行事务迁移、恢复快照并把上次运行中的轮次转为 `auto-paused`，随后创建窗口和托盘。普通轮次重新获取感知条件，大站保留本轮进度等待手动继续，离线时间不补计。重复启动只唤起已有窗口。计时不依赖 renderer 轮询。
 
-Renderer 启动时并行读取计时快照、设置和摄像头生命周期状态，并订阅经 schema 校验的事件。
+主窗口 Renderer 启动时并行读取计时快照、设置和摄像头生命周期状态，并订阅经 schema 校验的事件。独立提醒窗口只读取和订阅提醒，不获得主窗口的命令、设置、统计或摄像头接口。
 
 点击开始、暂停、继续、下一轮或重置时，或在计时器页按空格执行开始/暂停/继续时，React 调用 `window.pomodoro.command`。Preload 和 Main 分别做 schema 校验，Main 将命令交给唯一 TimerEngine；成功迁移后保存快照，并通过 `pomodoro:event` 广播到窗口和托盘。Renderer 从事件更新显示，不自行扣减权威剩余时间。空格不拦截表单、菜单、其他控件、统计或设置页，不重复处理长按、组合键及输入法组合状态。
 
@@ -24,6 +27,10 @@ Renderer 为权限、视频和模型启动设置 20 秒期限，Main 等待首�
 普通休息尚未正式开始时，点击「已站立，开始大站」通过相同 `command` 通道发送 `start-standing-break`。Main 校验来源与命令后，TimerEngine 核对 `round.hasStarted=false`、普通休息未运行且剩余时间等于总时长，再为本轮分配大站时长并开始。常规布局提供直接按钮，紧凑窗口通过更多菜单选择；普通休息一旦开始即移除入口，暂停和重启不重新开放。显式重置清空本轮进度并重新准备时可再次选择。
 
 `publishSnapshot` 在广播前统一同步摄像头会话：大站主动停用摄像头并保留监控偏好；结束或跳轮后，后续需要监控的轮次启用新代次，等待新鲜样本。主动停用与旧报告拒绝不触发触控回退。此路径覆盖显式命令和自然归零；同步函数不递归发布快照。
+
+每轮自然完成并成功持久化后，TimerEngine 更新进程内完成版本和完成类型/时间。Main 显示独立无声卡片，以自身 preload 的 `getReminder/subscribeReminder` 读取及呈现最新完成；不调用会聚焦主窗口的唤起路径，也不再额外发系统完成通知。点击“知道了”经 `dismissReminder(id)` 仅确认当前 ID 的提醒，旧确认不能清除新提醒；下一轮的感知和计时不等待卡片。锁屏/睡眠隐藏卡片，恢复后重新展示未确认条目；退出清除内存状态。
+
+提醒窗口使用独立的隔离 session、自包含 preload 和严格 CSP，所有权限请求均拒绝。Main 将读取和确认提醒限定为当前提醒窗口的主 frame；主窗口的 sender 同样不能调用提醒接口。提醒只在 Main 内存中存在，卡片故障只显示可恢复界面错误，不冻结 TimerEngine 或改写设置。
 
 专注中手动暂停形成锁，只有用户继续才能解除。活动／桌前休息中暂停不形成永久锁：未点暂停或点过暂停，都继续参与自动休息；下一有效休息条件可自动开始或恢复，不额外强制等待一遍阈值。大站暂停不建立专注锁，但只接受按钮继续。实际键鼠操作产生新的输入时，普通输入休息自然重新等待完整阈值。旧检查点中手动暂停的普通休息轮在恢复时转为自动等待，进度不变，旧的专注锁仍保留。
 
