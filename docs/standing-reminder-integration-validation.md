@@ -2,6 +2,8 @@
 
 日期：2026-11-16。分支：`codex/standing-break`。本记录区分远端主线合并、联合源码检查与本机安装交付，不替代 Windows 或真实摄像头／电源事件验收。
 
+最新本机版本为 `0.1.0-beta.3-standing-entry.28ef106`，小窗入口修正记录见文末；下文先保留完成提醒整合时的交付记录。
+
 ## 问题与合并范围
 
 用户记得专注完成后出现独立弹窗。核对实际安装包发现：先前安装版含 `reminder.html`、独立提醒 preload 和提醒 IPC；本地大站构建 `0.1.0-beta.3-standing.dbbb634` 只有系统通知逻辑。原因是大站与提醒分别基于 `7e350c3` 开发，提醒所在 PR 当时未合入主线，单独打包大站遗漏了该功能。
@@ -53,3 +55,16 @@
 ## 接续位置
 
 远端 `main` 已包含 PR #10；大站源码整合位于 `codex/standing-break` 的 `52a3194`，本机也已更新到对应整合版本。按用户要求停止后续测试，本次本地安装交付完成。若后续明确要求恢复回归，再运行全量 Electron、DMG 冒烟及实包提醒用例；不要将本次已停止的检查记作通过。
+
+## 后续：小窗准备期的大站入口
+
+用户反馈准备倒数时看不到大站提示。只读观察本机旧版：当前是已经开始过的长休，剩余 `05:28`、`hasStarted=true`，显示的是“无输入 40 秒继续休息”，此状态按已确认规则不再提供转换入口。另外，小窗宽度小于 320 px 或高度小于 360 px 时，旧 CSS 也会在首次准备期隐藏直接按钮，只保留未展开菜单中的入口，存在发现性问题。
+
+修正提交 `28ef106b63fd9c19d8c513c5f8448dccc71aff6f` 仅调整 Renderer：将同一个直接按钮移到轮次标题旁，小窗显示「开始大站」，常规布局显示「已站立，开始大站」，不再隐藏按钮。菜单入口、可访问名称、原命令与首次准备期条件保持一致，没有变更 TimerEngine、IPC 或数据库。
+
+按用户此前要求，本次没有运行测试套件，也没有重置或跳过真实轮次来演示入口；仅完成生产构建与本机替换。ARM64 DMG 构建成功，版本为 `0.1.0-beta.3-standing-entry.28ef106`，已安装到 `/Applications/Pomodoro Timer.app` 并正常打开，原长休 `05:28` 进度保留。由于该轮已经开始，当前页面仍不显示大站按钮；首次准备期的实际布局本轮未另行验证。
+
+- DMG：`apps/desktop/dist/Pomodot-0.1.0-beta.3-standing-entry.28ef106-mac-arm64.dmg`，SHA-256 `1e6936d46dbd16915bf2acb9b41fb170757ffd2fd18be8b911a769f0fb9238c5`。
+- 安装 ASAR：SHA-256 `8267f42edeef199cdfe7e459e69bf1ed9924495d05a2547e44c4c3368df47890`，与构建及 DMG 复制结果一致。
+- 用户 SQLite 备份：忽略目录 `diagnostics/installed-data-backup-qrg706hl`；安装流程未改动真实用户数据目录。
+- 旧安装包目录：`~/.Trash/Pomodot-old-packages-a8d5gc63`；旧应用：`~/.Trash/Pomodot-old-installed-app-zb2d2te8/Pomodoro Timer.app`。没有清空废纸篓。
