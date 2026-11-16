@@ -2,6 +2,8 @@
 
 日期：2026-11-15。分支：`codex/standing-break`。实现前提交：`16162e7`，功能提交：`dbbb634`。本轮已生成并安装本地构建 `0.1.0-beta.3-standing.dbbb634`，未改变公开 beta.3 安装包、源码版本或发布 tag。行为与取舍见[设计记录](standing-break-design.md)，传播材料见[调研记录](standing-break-research.md)。
 
+后续已整合完成提醒并更新本机应用为 `0.1.0-beta.3-standing-reminder.52a3194`，最新交付及检查边界见[大站与完成提醒整合验证](standing-reminder-integration-validation.md)。下文保留本轮历史记录。
+
 ## 执行环境
 
 - macOS 26.4.1（25E253），Apple Silicon / arm64。
