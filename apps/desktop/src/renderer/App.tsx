@@ -297,6 +297,11 @@ function TimerView({
           <div className="roundMeta">
             <h1 id="round-title">{currentRoundLabel}</h1>
             {snapshot.round.kind !== "focus" && !standing && <span className="breakMode">{snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}</span>}
+            {canStartStanding && <button type="button" className="standingBreakAction" title={standingTitle} aria-label="已站立，开始大站"
+              onClick={() => onCommand("start-standing-break")}><PersonStanding size={14} />
+              <span className="standingBreakFullLabel">已站立，开始大站</span>
+              <span className="standingBreakCompactLabel" aria-hidden="true">开始大站</span>
+            </button>}
           </div>
           <div className="timerStatus" aria-live="polite">
             <div className={`statePill state-${snapshot.status}`} title={currentStatus}>
@@ -304,8 +309,6 @@ function TimerView({
               <span>{currentStatus}</span>
             </div>
             <p className="monitorStatus" data-available={standing || (snapshot.automation.activePresenceSource === "camera" ? snapshot.automation.cameraMonitoringAvailable : snapshot.automation.inputMonitoringAvailable)}>{monitorStatus}</p>
-            {canStartStanding && <button type="button" className="standingBreakAction" title={standingTitle}
-              onClick={() => onCommand("start-standing-break")}><PersonStanding size={14} />已站立，开始大站</button>}
           </div>
         </div>
         <div className="dialSlot">

@@ -495,6 +495,10 @@ select:focus-visible {
   border-color: var(--round-color, var(--accent));
 }
 
+.standingBreakCompactLabel {
+  display: none;
+}
+
 .standingBreakAction svg,
 .timerMenu button svg {
   flex: 0 0 auto;
@@ -1191,7 +1195,24 @@ input[aria-invalid="true"] {
 
 @container timer-window (width < 320px) or (height < 360px) {
   .standingBreakAction {
+    gap: 3px;
+    padding: 2px 4px;
+    font-size: 10px;
+    line-height: 14px;
+    white-space: nowrap;
+  }
+
+  .standingBreakAction svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .standingBreakFullLabel {
     display: none;
+  }
+
+  .standingBreakCompactLabel {
+    display: inline;
   }
 }
 
