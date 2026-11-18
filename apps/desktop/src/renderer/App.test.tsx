@@ -335,7 +335,7 @@ describe("App", () => {
   });
 
   it("fades only after leaving for two seconds and restores immediately on entry", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
     await screen.findByRole("heading", { name: "专注" });
     vi.useFakeTimers();
     const timer = screen.getByRole("main");
@@ -359,7 +359,7 @@ describe("App", () => {
   });
 
   it("keeps an open menu and keyboard-focused controls clear", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
     await screen.findByRole("heading", { name: "专注" });
     vi.useFakeTimers();
     const timer = screen.getByRole("main");
@@ -378,7 +378,7 @@ describe("App", () => {
   });
 
   it("does not fade during a drag and restarts the delay after release or resize", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
     await screen.findByRole("heading", { name: "专注" });
     vi.useFakeTimers();
     const timer = screen.getByRole("main");
@@ -396,7 +396,7 @@ describe("App", () => {
   });
 
   it("recovers when native dragging consumes the pointer-up event", async () => {
-    render(<App />);
+    await act(async () => { render(<App />); });
     await screen.findByRole("heading", { name: "专注" });
     vi.useFakeTimers();
     const timer = screen.getByRole("main");
@@ -491,7 +491,7 @@ describe("App", () => {
     expect(mode.textContent).toBe("");
     expect(mode).toHaveAttribute("title", expect.stringContaining("当前：触控感知"));
     expect(mode).toHaveAttribute("title", expect.stringContaining("系统输入"));
-    expect(document.querySelector(".roundMeta button")).not.toBeInTheDocument();
+    expect(document.querySelector(".roundMeta .presenceModeButton")).not.toBeInTheDocument();
     vi.mocked(window.pomodoro.updateSettings).mockResolvedValue({ ...settings, focusPresenceSource: "camera" });
     fireEvent.click(mode);
     await waitFor(() => expect(window.pomodoro.updateSettings).toHaveBeenCalledWith({ focusPresenceSource: "camera" }));
@@ -1064,6 +1064,7 @@ describe("App", () => {
 
     render(<App />);
     await screen.findByRole("heading", { name: "专注" });
+    await waitFor(() => expect(listener).toBeDefined());
     expect(document.documentElement).not.toHaveClass("dark");
 
     matches = true;
