@@ -174,13 +174,17 @@ function TimerView({
   const currentStatus = statusText(snapshot, settings);
   const standing = snapshot.round.breakMode === "standing";
   const currentRoundLabel = roundLabel(snapshot.round);
-  const canStartStanding = snapshot.round.kind !== "focus" && !standing && snapshot.round.hasStarted === false
-    && (snapshot.status === "idle" || snapshot.status === "auto-paused")
+  const canToggleStanding = snapshot.round.kind !== "focus"
     && snapshot.automation.pauseReason !== "system-lock" && snapshot.automation.pauseReason !== "storage-unavailable";
-  const standingSeconds = snapshot.round.kind === "long-break"
-    ? settings.standingLongBreakDurationSeconds ?? settings.longBreakDurationSeconds * 2
-    : settings.standingShortBreakDurationSeconds ?? settings.shortBreakDurationSeconds * 2;
-  const standingTitle = `已确认站立，开始 ${Number((standingSeconds / 60).toFixed(2))} 分钟大站休息；本轮由你手动控制，感知不参与计时。`;
+  const standingToggleCommand: TimerCommand = standing ? "exit-standing-break" : "start-standing-break";
+  const standingToggleLabel = standing ? "切回普通休息" : "切换大站";
+  const standingCompactLabel = standing ? "切回" : "大站";
+  const convertedDuration = standing
+    ? formatDuration(Math.min(Math.max(1, Math.round(snapshot.round.totalDurationMs / 2)), Math.max(1, Math.ceil(snapshot.remainingMs / 2))))
+    : formatDuration(snapshot.remainingMs * 2);
+  const standingTitle = standing
+    ? `切回普通休息：剩余时间按 1/2 折算为 ${convertedDuration}，恢复自动休息检测。`
+    : `切换为大站休息：剩余时间按 2 倍折算为 ${convertedDuration}；本轮由你手动控制，感知不参与计时。`;
   const monitorStatus = standing ? "手动计时 · 感知不参与"
     : snapshot.automation.activePresenceSource === "camera"
     ? snapshot.automation.cameraMonitoringAvailable
@@ -280,8 +284,8 @@ function TimerView({
             </button>
             {menuOpen && (
               <div className="timerMenu" id="timer-menu" role="menu" aria-label="计时器操作" onKeyDown={navigateMenu}>
-                {canStartStanding && <button type="button" role="menuitem" title={standingTitle}
-                  onClick={() => menuAction(() => onCommand("start-standing-break"))}><PersonStanding size={15} />已站立，开始大站</button>}
+                {canToggleStanding && <button type="button" role="menuitem" title={standingTitle}
+                  onClick={() => menuAction(() => onCommand(standingToggleCommand))}><PersonStanding size={15} />{standingToggleLabel}</button>}
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("stats"))}><BarChart3 size={15} />打开统计</button>
                 <button type="button" role="menuitem" onClick={() => menuAction(() => onView("settings"))}><SettingsIcon size={15} />打开设置</button>
                 <button type="button" role="menuitem" disabled={modeChanging} title={standing ? "感知选择适用于后续轮次，不影响当前大站计时。" : undefined} onClick={() => menuAction(() => onModeChange(settings.focusPresenceSource === "input" ? "camera" : "input"))}><Camera size={15} />{settings.focusPresenceSource === "input" ? "切换为监控感知" : "切换为触控感知"}</button>
@@ -297,10 +301,10 @@ function TimerView({
           <div className="roundMeta">
             <h1 id="round-title">{currentRoundLabel}</h1>
             {snapshot.round.kind !== "focus" && !standing && <span className="breakMode">{snapshot.round.breakMode === "active" ? "活动休息" : "桌前休息"}</span>}
-            {canStartStanding && <button type="button" className="standingBreakAction" title={standingTitle} aria-label="已站立，开始大站"
-              onClick={() => onCommand("start-standing-break")}><PersonStanding size={14} />
-              <span className="standingBreakFullLabel">已站立，开始大站</span>
-              <span className="standingBreakCompactLabel" aria-hidden="true">开始大站</span>
+            {canToggleStanding && <button type="button" className="standingBreakAction" data-standing={standing} title={standingTitle} aria-label={standingToggleLabel}
+              onClick={() => onCommand(standingToggleCommand)}><PersonStanding size={14} />
+              <span className="standingBreakFullLabel">{standingToggleLabel}</span>
+              <span className="standingBreakCompactLabel" aria-hidden="true">{standingCompactLabel}</span>
             </button>}
           </div>
           <div className="timerStatus" aria-live="polite">
@@ -364,21 +368,13 @@ const numericSettings = {
   focusDurationSeconds: { label: "专注时长", min: 1, max: 120, scale: 60, hint: "分钟 · 下一轮生效" },
   shortBreakDurationSeconds: { label: "短休时长", min: 1, max: 60, scale: 60, hint: "分钟 · 下一轮生效" },
   longBreakDurationSeconds: { label: "长休时长", min: 1, max: 90, scale: 60, hint: "分钟 · 下一轮生效" },
-  standingShortBreakDurationSeconds: { label: "大站短休时长", min: 1, max: 120, scale: 60, hint: "分钟 · 留空跟随短休两倍；下次开始大站时生效" },
-  standingLongBreakDurationSeconds: { label: "大站长休时长", min: 1, max: 180, scale: 60, hint: "分钟 · 留空跟随长休两倍；下次开始大站时生效" },
   inputIdleThresholdSeconds: { label: "输入闲置阈值", min: 10, max: 600, scale: 1, hint: "秒 · 下次输入样本生效" },
 } as const;
 type NumericSetting = keyof typeof numericSettings;
 const numericSettingKeys = Object.keys(numericSettings) as NumericSetting[];
-function optionalNumber(key: NumericSetting): boolean {
-  return key === "standingShortBreakDurationSeconds" || key === "standingLongBreakDurationSeconds";
-}
 
 function settingsNumbers(settings: Settings): Record<NumericSetting, string> {
-  return Object.fromEntries(numericSettingKeys.map((key) => {
-    const value = settings[key];
-    return [key, value === null ? "" : String(value / numericSettings[key].scale)];
-  })) as Record<NumericSetting, string>;
+  return Object.fromEntries(numericSettingKeys.map((key) => [key, String(settings[key] / numericSettings[key].scale)])) as Record<NumericSetting, string>;
 }
 
 function SettingsView({
@@ -422,10 +418,9 @@ function SettingsView({
   const errors = Object.fromEntries(numericSettingKeys.map((key) => {
     const { min, max } = numericSettings[key];
     const empty = numbers[key].trim() === "";
-    if (empty && optionalNumber(key)) return [key, null];
     const value = Number(numbers[key]);
     return [key, empty || !Number.isInteger(value) || value < min || value > max
-      ? `请输入 ${min}–${max} 之间的整数${optionalNumber(key) ? "，或留空跟随两倍时长" : ""}` : null];
+      ? `请输入 ${min}–${max} 之间的整数` : null];
   })) as Record<NumericSetting, string | null>;
 
   const save = async () => {
@@ -438,8 +433,6 @@ function SettingsView({
         focusDurationSeconds: Number(numbers.focusDurationSeconds) * 60,
         shortBreakDurationSeconds: Number(numbers.shortBreakDurationSeconds) * 60,
         longBreakDurationSeconds: Number(numbers.longBreakDurationSeconds) * 60,
-        standingShortBreakDurationSeconds: numbers.standingShortBreakDurationSeconds.trim() === "" ? null : Number(numbers.standingShortBreakDurationSeconds) * 60,
-        standingLongBreakDurationSeconds: numbers.standingLongBreakDurationSeconds.trim() === "" ? null : Number(numbers.standingLongBreakDurationSeconds) * 60,
         focusRoundsPerCycle: draft.focusRoundsPerCycle,
         inputIdleThresholdSeconds: Number(numbers.inputIdleThresholdSeconds),
         defaultBreakMode: draft.defaultBreakMode,
@@ -461,14 +454,10 @@ function SettingsView({
 
   const numberInput = (key: NumericSetting) => {
     const { label, min, max, hint } = numericSettings[key];
-    const ordinaryMinutes = key === "standingShortBreakDurationSeconds" ? Number(numbers.shortBreakDurationSeconds)
-      : key === "standingLongBreakDurationSeconds" ? Number(numbers.longBreakDurationSeconds) : undefined;
-    const placeholder = ordinaryMinutes !== undefined && Number.isFinite(ordinaryMinutes) && ordinaryMinutes > 0
-      ? String(ordinaryMinutes * 2) : undefined;
     return (
       <label key={key} className={key === "inputIdleThresholdSeconds" ? "wideSetting" : undefined}>
         {label}
-        <input type="number" aria-label={label} min={min} max={max} step="1" value={numbers[key]} placeholder={placeholder}
+        <input type="number" aria-label={label} min={min} max={max} step="1" value={numbers[key]}
           aria-invalid={Boolean(errors[key])} aria-describedby={`${key}-hint${errors[key] ? ` ${key}-error` : ""}`}
           disabled={saving} onChange={(event) => setNumber(key, event.target.value)} />
         <small id={`${key}-hint`}>{hint}</small>
@@ -492,7 +481,7 @@ function SettingsView({
         <fieldset className="settingsFields" disabled={saving}>
           <section className="settingsSection">
             <h2>节奏</h2>
-            <p className="infoNote">大站 · 站立休息：站起来，手上的事可以继续。准备期手动选择，本轮输入或监控不打断。</p>
+            <p className="infoNote">大站 · 站立休息：站起来，手上的事可以继续。休息轮随时可与普通休息互切，剩余时间按两倍自动折算，本轮输入或监控不打断。</p>
             <div className="settingGrid">
               {numericSettingKeys.filter((key) => key !== "inputIdleThresholdSeconds").map(numberInput)}
               <label>

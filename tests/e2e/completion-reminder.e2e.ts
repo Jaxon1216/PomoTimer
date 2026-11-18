@@ -259,7 +259,7 @@ test("keeps a focus card through standing and replaces it on completion while re
       };
     });
     await timer.evaluate(async () => {
-      await window.pomodoro.updateSettings({ focusDurationSeconds: 60, shortBreakDurationSeconds: 60, standingShortBreakDurationSeconds: null });
+      await window.pomodoro.updateSettings({ focusDurationSeconds: 60, shortBreakDurationSeconds: 60 });
       await window.pomodoro.command("next");
       await window.pomodoro.command("next");
     });
@@ -289,7 +289,7 @@ test("keeps a focus card through standing and replaces it on completion while re
     const completedFocus = (await timer.evaluate(() => window.pomodoro.getStatistics())).today;
     expect(completedFocus).toMatchObject({ completedFocusMinutes: 1, completedFocusRounds: 1 });
     expect(await timer.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
-      status: "auto-paused", round: { kind: "short-break", hasStarted: false, totalDurationMs: 60_000 },
+      status: "auto-paused", round: { kind: "short-break", totalDurationMs: 60_000 },
     });
 
     await timer.getByRole("button", { name: "感知模式：触控，切换为监控" }).click();
@@ -299,22 +299,38 @@ test("keeps a focus card through standing and replaces it on completion while re
     // A controlled present sample keeps ordinary camera rest in preparation;
     // the pending detector cannot introduce an away sample before the choice.
     const waiting = await timer.evaluate((generation) => window.pomodoro.reportCameraPresence("present", generation), originalCamera.generation);
-    expect(waiting).toMatchObject({ status: "auto-paused", round: { hasStarted: false }, automation: { activePresenceSource: "camera" } });
-    await timer.getByRole("button", { name: "已站立，开始大站", exact: true }).click();
+    expect(waiting).toMatchObject({ status: "auto-paused", automation: { activePresenceSource: "camera" } });
+    await timer.getByRole("button", { name: "切换大站", exact: true }).click();
     await expect(timer.getByRole("heading", { name: "大站短休" })).toBeVisible();
     const standing = await timer.evaluate(() => window.pomodoro.getSnapshot());
     expect(standing).toMatchObject({
-      status: "running", round: { breakMode: "standing", totalDurationMs: 120_000, hasStarted: true },
+      status: "running", round: { breakMode: "standing", totalDurationMs: 120_000 },
       automation: { activePresenceSource: "none" },
     });
     expect((await timer.evaluate(() => window.pomodoro.getCameraState())).enabled).toBe(false);
     expect((await timer.evaluate(() => window.pomodoro.getSettings())).focusPresenceSource).toBe("camera");
     expect(await readReminder(reminder)).toEqual(focusCard);
+    await timer.getByRole("button", { name: "切回普通休息" }).click();
+    await expect.poll(() => timer.evaluate(() => Reflect.get(window, "standingCameraRequests"))).toBe(2);
+    const ordinaryCamera = await timer.evaluate(() => window.pomodoro.getCameraState());
+    expect(ordinaryCamera.enabled).toBe(true);
+    expect(ordinaryCamera.generation).toBeGreaterThan(originalCamera.generation);
+    await expect(timer.evaluate((generation) => window.pomodoro.reportCameraPresence("away", generation), originalCamera.generation)).rejects.toThrow("会话已失效");
+    expect(await timer.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+      status: "auto-paused", round: { breakMode: "active", totalDurationMs: 60_000 },
+      automation: { activePresenceSource: "camera", cameraPresence: "unknown" },
+    });
+    expect(await readReminder(reminder)).toEqual(focusCard);
+    const ordinary = await timer.evaluate((generation) => window.pomodoro.reportCameraPresence("away", generation), ordinaryCamera.generation);
+    expect(ordinary.status).toBe("running");
+    await timer.getByRole("button", { name: "切换大站", exact: true }).click();
+    await expect(timer.getByRole("heading", { name: "大站短休" })).toBeVisible();
+    const standingRemaining = (await timer.evaluate(() => window.pomodoro.getSnapshot())).remainingMs;
     await expect(reminder.getByRole("button", { name: "知道了", exact: true })).toBeVisible();
     await application.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.focus(), otherId);
     await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.id)).toBe(otherId);
 
-    await advance(application, standing.remainingMs + 1);
+    await advance(application, standingRemaining + 1);
     await expect(reminder.getByRole("heading", { name: "休息结束" })).toBeVisible();
     const restCard = await readReminder(reminder);
     expect(restCard).toMatchObject({ id: focusCard!.id + 1, completedKind: "short-break", nextKind: "focus" });
@@ -324,7 +340,7 @@ test("keeps a focus card through standing and replaces it on completion while re
     expect(await application.evaluate(() => Reflect.get(globalThis, "standingNativeNotifications"))).toBe(0);
     expect(await reminder.evaluate(() => ({ keys: Object.keys(window.pomodoro).sort(), node: typeof process, require: typeof globalThis.require })))
       .toEqual({ keys: ["dismissReminder", "getReminder", "subscribeReminder"], node: "undefined", require: "undefined" });
-    await expect.poll(() => timer.evaluate(() => Reflect.get(window, "standingCameraRequests"))).toBe(2);
+    await expect.poll(() => timer.evaluate(() => Reflect.get(window, "standingCameraRequests"))).toBe(3);
     const renewedCamera = await timer.evaluate(() => window.pomodoro.getCameraState());
     expect(renewedCamera.enabled).toBe(true);
     expect(renewedCamera.generation).toBeGreaterThan(originalCamera.generation);

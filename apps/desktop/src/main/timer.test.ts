@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TimerCheckpoint } from "./checkpoint.js";
 import type { TimerSnapshot } from "../shared/contracts.js";
 import {
@@ -77,36 +77,31 @@ function observeIdle(engine: TimerEngine, clock: FakeClock, firstSecond: number,
 
 describe("TimerEngine", () => {
   describe("standing and completion-reminder integration", () => {
-    it.each([
-      { name: "twice the configured rest", shortOverride: null, longOverride: null, shortMs: 120_000, longMs: 240_000 },
-      { name: "independent custom durations", shortOverride: 180, longOverride: 300, shortMs: 180_000, longMs: 300_000 },
-    ])("completes one-minute focus and standing short/long rest with $name", ({ shortOverride, longOverride, shortMs, longMs }) => {
+    it("completes one-minute focus and standing short/long rest at twice the configured rest", () => {
       const store = new FakeStore();
       const clock = new FakeClock();
       store.settings = { ...defaultSettings, focusDurationSeconds: 60, shortBreakDurationSeconds: 60,
-        longBreakDurationSeconds: 120, focusRoundsPerCycle: 2,
-        standingShortBreakDurationSeconds: shortOverride, standingLongBreakDurationSeconds: longOverride };
+        longBreakDurationSeconds: 120, focusRoundsPerCycle: 2 };
       const engine = new TimerEngine(store, clock);
       const completedKinds: string[] = [];
 
-      for (const [index, breakKind, standingMs] of [[0, "short-break", shortMs], [1, "long-break", longMs]] as const) {
-        expect(engine.snapshot).toMatchObject({ status: "idle", remainingMs: 60_000,
-          round: { kind: "focus", hasStarted: false } });
+      for (const [index, breakKind, standingMs] of [[0, "short-break", 120_000], [1, "long-break", 240_000]] as const) {
+        expect(engine.snapshot).toMatchObject({ status: "idle", remainingMs: 60_000, round: { kind: "focus" } });
         engine.command("start");
         clock.advance(60_000);
         const prepared = engine.snapshot;
-        expect(prepared).toMatchObject({ status: "auto-paused", round: { kind: breakKind, hasStarted: false } });
+        expect(prepared).toMatchObject({ status: "auto-paused", round: { kind: breakKind } });
         expect(engine.completedRound).toEqual({ revision: index * 2 + 1, completedKind: "focus", nextKind: breakKind,
           completedAt: clock.date.toISOString() });
         completedKinds.push(engine.completedRound!.completedKind);
         expect(store.sessions).toHaveLength(index + 1);
 
         expect(engine.command("start-standing-break")).toMatchObject({ status: "running", remainingMs: standingMs,
-          round: { kind: breakKind, breakMode: "standing", hasStarted: true },
+          round: { kind: breakKind, breakMode: "standing" },
           automation: { activePresenceSource: "none", manualPauseLocked: false } });
         expect(engine.completedRoundsRevision).toBe(index * 2 + 1);
         clock.advance(standingMs);
-        expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null, hasStarted: false } });
+        expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null } });
         const completed = engine.completedRound;
         expect(completed).toEqual({ revision: index * 2 + 2, completedKind: breakKind, nextKind: "focus",
           completedAt: clock.date.toISOString() });
@@ -141,11 +136,11 @@ describe("TimerEngine", () => {
       expect(() => engine.snapshot).toThrow("snapshot failed");
       expect(engine.completedRound).toEqual(previousCompletion);
       expect(engine.completedRoundsRevision).toBe(1);
-      expect(store.snapshot?.round).toMatchObject({ kind: breakKind, breakMode: "standing", hasStarted: true });
+      expect(store.snapshot?.round).toMatchObject({ kind: breakKind, breakMode: "standing" });
       expect(store.sessions).toHaveLength(1);
 
       store.failSnapshot = false;
-      expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null, hasStarted: false } });
+      expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null } });
       const completion = { revision: 2, completedKind: breakKind, nextKind: "focus", completedAt: clock.date.toISOString() };
       expect(engine.completedRound).toEqual(completion);
       expect(engine.completedRoundsRevision).toBe(2);
@@ -160,20 +155,20 @@ describe("TimerEngine", () => {
   });
 
   describe("manual standing breaks", () => {
-    it.each(["input", "camera"] as const)("starts only from a fresh %s break preparation and keeps the cycle position", (source) => {
+    it.each(["input", "camera"] as const)("starts from %s break preparation at twice the remaining time and keeps the cycle position", (source) => {
       const { engine, clock, store } = create();
       engine.applySettings({ focusPresenceSource: source, defaultBreakMode: "desk" });
       expect(() => engine.command("start-standing-break")).toThrow();
-      const waiting = engine.command("next");
+      expect(() => engine.command("exit-standing-break")).toThrow();
+      engine.command("next");
       engine.inputSample(35);
       clock.advance(10_000);
       const standing = engine.command("start-standing-break");
       expect(standing).toMatchObject({
         status: "running", remainingMs: 600_000,
-        round: { kind: "short-break", cycleNumber: 1, positionInCycle: 2, breakMode: "standing", totalDurationMs: 600_000, hasStarted: true },
+        round: { kind: "short-break", cycleNumber: 1, positionInCycle: 2, breakMode: "standing", totalDurationMs: 600_000 },
         automation: { activePresenceSource: "none", manualPauseLocked: false, breakPreparation: null, pauseReason: "none" },
       });
-      expect(waiting.round.hasStarted).toBe(false);
       expect(engine.settings.defaultBreakMode).toBe("desk");
       expect(engine.settings.focusPresenceSource).toBe(source);
       expect(store.sessions).toHaveLength(0);
@@ -188,15 +183,60 @@ describe("TimerEngine", () => {
       expect(engine.command("start-standing-break").round.breakMode).toBe("standing");
     });
 
-    it.each(["running", "paused-immediately", "paused-after-progress"] as const)("rejects conversion once ordinary rest has started: %s", (state) => {
+    it.each(["running", "paused-immediately", "paused-after-progress", "reset-idle"] as const)("scales remaining break time by 2x when entering standing from %s", (state) => {
       const { engine, clock } = create();
       engine.command("next");
       engine.inputSample(40);
-      if (state === "paused-after-progress") clock.advance(1_000);
-      if (state !== "running") engine.command("pause");
-      const before = structuredClone(engine.snapshot);
+      if (state === "running" || state === "paused-after-progress") clock.advance(120_000);
+      if (state === "paused-immediately" || state === "paused-after-progress") engine.command("pause");
+      if (state === "reset-idle") engine.command("reset");
+      const expectedRemaining = state === "running" || state === "paused-after-progress" ? 360_000 : 600_000;
+      const standing = engine.command("start-standing-break");
+      expect(standing).toMatchObject({
+        status: "running",
+        remainingMs: expectedRemaining,
+        round: { kind: "short-break", breakMode: "standing", totalDurationMs: 600_000 },
+        automation: { activePresenceSource: "none", pauseReason: "none", breakPreparation: null },
+      });
       expect(() => engine.command("start-standing-break")).toThrow();
-      expect(engine.snapshot).toMatchObject({ remainingMs: before.remainingMs, round: before.round, status: before.status });
+    });
+
+    it("switches back and forth between standing and ordinary rest with 2x and 1/2 scaling without drift", () => {
+      const { engine, clock } = create();
+      engine.applySettings({ defaultBreakMode: "desk", focusPresenceSource: "camera" });
+      engine.command("next");
+      const standing = engine.command("start-standing-break");
+      expect(standing).toMatchObject({ status: "running", remainingMs: 600_000, round: { breakMode: "standing", totalDurationMs: 600_000 } });
+      clock.advance(240_001); // 359,999ms left in standing (~40% complete)
+      const ordinary = engine.command("exit-standing-break");
+      expect(ordinary).toMatchObject({
+        status: "auto-paused",
+        remainingMs: 180_000,
+        round: { kind: "short-break", breakMode: "desk", totalDurationMs: 300_000 },
+        automation: { activePresenceSource: "input", pauseReason: "break-condition", manualPauseLocked: false },
+      });
+      expect(() => engine.command("exit-standing-break")).toThrow();
+      const resumedStanding = engine.command("start-standing-break");
+      expect(resumedStanding).toMatchObject({ status: "running", remainingMs: 360_000, round: { breakMode: "standing", totalDurationMs: 600_000 } });
+      expect(engine.command("exit-standing-break").remainingMs).toBe(180_000);
+      expect(engine.inputSample(40).status).toBe("running");
+    });
+
+    it("waits for fresh camera absence after exiting standing back to a camera active break", () => {
+      const { engine, clock } = create();
+      engine.applySettings({ defaultBreakMode: "active", focusPresenceSource: "camera" });
+      engine.command("next");
+      engine.command("start-standing-break");
+      clock.advance(599_999); // 1ms remaining in standing -> clamps to 1ms (> 0) in ordinary break
+      const ordinary = engine.command("exit-standing-break");
+      expect(ordinary).toMatchObject({
+        status: "auto-paused",
+        remainingMs: 1,
+        round: { breakMode: "active", totalDurationMs: 300_000 },
+        automation: { activePresenceSource: "camera", pauseReason: "source-unavailable" },
+      });
+      expect(engine.cameraSample("present").status).toBe("auto-paused");
+      expect(engine.cameraSample("away").status).toBe("running");
     });
 
     it("does not turn an already finished break into standing focus when the command arrives at zero", () => {
@@ -205,32 +245,41 @@ describe("TimerEngine", () => {
       engine.command("start");
       clock.advance(300_000);
       expect(() => engine.command("start-standing-break")).toThrow();
-      expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null, hasStarted: false } });
+      expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null } });
       expect(store.sessions).toHaveLength(0);
     });
 
-    it("requires a new explicit reset before an ordinary rest can be selected again", () => {
-      const { engine } = create();
+    it("does not freeze an ordinary break at zero when the clock crosses the deadline during the switch", () => {
+      const { engine, clock } = create();
       engine.command("next");
       engine.command("start");
-      engine.command("pause");
-      expect(() => engine.command("start-standing-break")).toThrow();
-      expect(engine.command("reset").round.hasStarted).toBe(false);
-      expect(engine.command("start-standing-break").status).toBe("running");
-      expect(() => engine.command("start-standing-break")).toThrow();
+      clock.advance(299_999);
+      vi.spyOn(clock, "now").mockReturnValueOnce(299_999).mockReturnValue(300_000);
+      expect(engine.command("start-standing-break")).toMatchObject({
+        status: "running", remainingMs: 2, round: { breakMode: "standing" },
+      });
     });
 
-    it("follows twice the current configured duration and keeps short and long overrides independent", () => {
+    it("keeps a standing command bound to its round at the focus completion boundary", () => {
+      const { engine, clock } = create();
+      engine.command("start");
+      clock.advance(1_800_000);
+      expect(() => engine.command("start-standing-break")).toThrow();
+      expect(engine.snapshot).toMatchObject({ status: "auto-paused", round: { kind: "short-break", breakMode: "active" } });
+      expect(engine.completedRound?.completedKind).toBe("focus");
+    });
+
+    it("always doubles the round's assigned ordinary duration without affecting an already-running round on settings updates", () => {
       const { engine } = create();
-      engine.applySettings({ shortBreakDurationSeconds: 480, longBreakDurationSeconds: 1_200,
-        standingShortBreakDurationSeconds: null, standingLongBreakDurationSeconds: 1_620 });
+      engine.applySettings({ shortBreakDurationSeconds: 480, longBreakDurationSeconds: 1_200 });
       engine.command("next");
       expect(engine.command("start-standing-break").remainingMs).toBe(960_000);
-      engine.applySettings({ shortBreakDurationSeconds: 600, standingShortBreakDurationSeconds: 720, standingLongBreakDurationSeconds: null });
+      engine.applySettings({ shortBreakDurationSeconds: 600 });
       expect(engine.snapshot.round.totalDurationMs).toBe(960_000);
+      expect(engine.command("exit-standing-break")).toMatchObject({ remainingMs: 480_000, round: { totalDurationMs: 480_000 } });
       engine.command("next");
       engine.command("next");
-      expect(engine.command("start-standing-break").remainingMs).toBe(720_000);
+      expect(engine.command("start-standing-break").remainingMs).toBe(1_200_000);
       engine.command("next");
       engine.command("next");
       expect(engine.command("start-standing-break").remainingMs).toBe(2_400_000);
@@ -288,27 +337,33 @@ describe("TimerEngine", () => {
       } else engine = new TimerEngine(store, clock);
       clock.advance(60_000);
       expect(engine.inputSample(600)).toMatchObject({ status: "auto-paused", remainingMs: remaining,
-        round: { breakMode: "standing", hasStarted: true }, automation: { activePresenceSource: "none", manualPauseLocked: false } });
+        round: { breakMode: "standing" }, automation: { activePresenceSource: "none", manualPauseLocked: false } });
       expect(engine.command("resume").status).toBe("running");
     });
 
-    it("does not allow standing selection while the screen is locked", () => {
+    it("does not allow standing switching while the screen is locked", () => {
       const { engine } = create();
       engine.command("next");
       engine.systemLock();
       expect(() => engine.command("start-standing-break")).toThrow("锁屏");
       engine.systemUnlock();
       expect(engine.command("start-standing-break").status).toBe("running");
+      engine.systemLock();
+      expect(() => engine.command("exit-standing-break")).toThrow("锁屏");
+      engine.systemUnlock();
+      expect(engine.command("exit-standing-break").round.breakMode).toBe("active");
     });
 
-    it("resets a standing round to its assigned duration and waits for manual start", () => {
+    it("resets a standing round to its assigned doubled duration and waits for manual start", () => {
       const { engine, clock } = create();
       engine.command("next");
-      engine.command("start-standing-break");
-      clock.advance(1_000);
-      engine.applySettings({ standingShortBreakDurationSeconds: 720 });
+      engine.command("start");
+      clock.advance(120_000);
+      engine.command("start-standing-break"); // remaining 360_000, total 600_000
+      clock.advance(10_000);
+      engine.applySettings({ shortBreakDurationSeconds: 480 });
       expect(engine.command("reset")).toMatchObject({ status: "idle", remainingMs: 600_000,
-        round: { breakMode: "standing", totalDurationMs: 600_000, hasStarted: false } });
+        round: { breakMode: "standing", totalDurationMs: 600_000 } });
       expect(engine.inputSample(600).status).toBe("idle");
       expect(engine.command("start").status).toBe("running");
     });
@@ -320,10 +375,10 @@ describe("TimerEngine", () => {
       const standing = engine.command("start-standing-break");
       if (action === "complete") clock.advance(standing.remainingMs);
       else engine.command("next");
-      expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null, hasStarted: false },
+      expect(engine.snapshot).toMatchObject({ status: "idle", round: { kind: "focus", breakMode: null },
         automation: { activePresenceSource: "camera" } });
       expect(engine.cameraSample("present").status).toBe("running");
-      expect(engine.command("next")).toMatchObject({ round: { kind: "short-break", breakMode: "desk", hasStarted: false },
+      expect(engine.command("next")).toMatchObject({ round: { kind: "short-break", breakMode: "desk" },
         automation: { activePresenceSource: "input" } });
       expect(store.sessions).toHaveLength(0);
       expect(engine.completedRoundsRevision).toBe(action === "complete" ? 1 : 0);
@@ -338,19 +393,20 @@ describe("TimerEngine", () => {
       expect(store.sessions).toHaveLength(0);
     });
 
-    it("preserves a fresh preparation across restart and conservatively closes a legacy nonidle round", () => {
+    it("allows entering and exiting standing across restarts with 2x and 1/2 remaining duration", () => {
       const { engine, store, clock } = create();
       engine.command("next");
+      engine.command("start");
+      clock.advance(60_000); // 240_000 remaining
+      engine.inputSample(40); // Persist the latest running progress before closing.
       const restored = new TimerEngine(store, clock);
-      expect(restored.snapshot.round.hasStarted).toBe(false);
-      expect(restored.command("start-standing-break").status).toBe("running");
-      const previous = store.snapshot;
-      if (!previous) throw new Error("missing checkpoint");
-      previous.round.breakMode = "active";
-      delete previous.round.hasStarted;
-      const legacy = new TimerEngine(store, clock);
-      expect(legacy.snapshot.round.hasStarted).toBe(true);
-      expect(() => legacy.command("start-standing-break")).toThrow();
+      expect(restored.command("start-standing-break")).toMatchObject({ status: "running", remainingMs: 480_000,
+        round: { breakMode: "standing", totalDurationMs: 600_000 } });
+      clock.advance(80_000); // 400_000 remaining
+      restored.inputSample(0);
+      const restoredStanding = new TimerEngine(store, clock);
+      expect(restoredStanding.command("exit-standing-break")).toMatchObject({ status: "auto-paused", remainingMs: 200_000,
+        round: { breakMode: "active", totalDurationMs: 300_000 } });
     });
   });
 

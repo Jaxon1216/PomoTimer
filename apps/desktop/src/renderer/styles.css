@@ -491,8 +491,13 @@ select:focus-visible {
   cursor: pointer;
 }
 
-.standingBreakAction:hover {
+.standingBreakAction:hover,
+.standingBreakAction[data-standing="true"] {
   border-color: var(--round-color, var(--accent));
+}
+
+.standingBreakAction[data-standing="true"] {
+  background: color-mix(in srgb, var(--round-color, var(--accent)) 10%, var(--surface-raised));
 }
 
 .standingBreakCompactLabel {
@@ -1194,6 +1199,10 @@ input[aria-invalid="true"] {
 }
 
 @container timer-window (width < 320px) or (height < 360px) {
+  .roundMeta {
+    gap: 4px;
+  }
+
   .standingBreakAction {
     gap: 3px;
     padding: 2px 4px;

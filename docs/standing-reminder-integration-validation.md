@@ -2,7 +2,7 @@
 
 日期：2026-11-16。分支：`codex/standing-break`。本记录区分远端主线合并、联合源码检查与本机安装交付，不替代 Windows 或真实摄像头／电源事件验收。
 
-最新本机版本为 `0.1.0-beta.3-standing-entry.28ef106`，小窗入口修正记录见文末；下文先保留完成提醒整合时的交付记录。
+小窗入口修正构建 `0.1.0-beta.3-standing-entry.28ef106` 的历史记录见文末。当前本机版本见[大站休息验证记录](standing-break-validation.md)。
 
 ## 问题与合并范围
 

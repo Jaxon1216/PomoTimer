@@ -17,7 +17,7 @@
 | 本地摄像头感知做了哪些验证？ | [摄像头开发验证](./camera-presence-validation.md)记录自动化、打包检查和真机边界。 |
 | 自动休息、空格和模式按钮这轮改了什么？ | [交互对齐记录](./sensing-interaction-design.md)与[修订验证](./sensing-interaction-validation.md)记录已确认规则和交付检查。 |
 | 置顶、桌面跟随和交互淡化如何区分？ | [桌面挂件设计](./desktop-widget-design.md)记录已确认规则和 macOS 方案取舍；[验证记录](./desktop-widget-validation.md)区分当前自动化结果与待执行的实机检查。 |
-| 大站与监控／触控有什么关系，名字从哪里来？ | [大站设计](./standing-break-design.md)说明准备期的本轮手动选择；[验证记录](./standing-break-validation.md)区分自动化与实机结果；[传播调研](./standing-break-research.md)区分公开线索、分析和文案建议。 |
+| 大站与监控／触控有什么关系，名字从哪里来？ | [大站设计](./standing-break-design.md)说明本轮双向切换；[验证记录](./standing-break-validation.md)记录已执行的检查；[传播调研](./standing-break-research.md)保留名称与文案依据。 |
 | 大站与完成弹窗是否同时在当前安装包中？ | [联合验证](./standing-reminder-integration-validation.md)记录提醒主线合并、联合回归与本机重新安装的构建来源。 |
 | 无声完成弹窗如何工作，遮挡反馈查到了什么？ | [可见性与完成提醒](./visibility-and-completion-reminder-design.md)记录确认方案与主线事实；[验证记录](./completion-reminder-validation.md)区分完成提醒回归与尚未复现的间歇遮挡。 |
 | 字体和视觉参考从哪里来？ | [第三方声明](./third-party-notices.md)说明素材来源。 |

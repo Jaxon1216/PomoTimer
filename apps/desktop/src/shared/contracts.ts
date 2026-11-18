@@ -24,7 +24,6 @@ export const roundSchema = z.object({
   focusRoundNumber: z.number().int().min(1).nullable(),
   breakMode: roundBreakModeSchema.nullable(),
   totalDurationMs: z.number().int().positive(),
-  hasStarted: z.boolean().optional(),
 }).strict().superRefine((round, context) => {
   if (round.kind === "focus" && round.breakMode === "standing") {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["breakMode"], message: "大站仅适用于休息轮" });
@@ -76,8 +75,6 @@ export const settingsSchema = z.object({
   focusDurationSeconds: z.number().int().min(60).max(7200),
   shortBreakDurationSeconds: z.number().int().min(60).max(3600),
   longBreakDurationSeconds: z.number().int().min(60).max(5400),
-  standingShortBreakDurationSeconds: z.number().int().min(60).max(7200).multipleOf(60).nullable(),
-  standingLongBreakDurationSeconds: z.number().int().min(60).max(10800).multipleOf(60).nullable(),
   focusRoundsPerCycle: z.number().int().min(1).max(8),
   inputIdleThresholdSeconds: z.number().int().min(10).max(600),
   focusPresenceSource: presenceSourceSchema,
@@ -104,7 +101,7 @@ export type StatisticsSnapshot = z.infer<typeof statisticsSnapshotSchema>;
 
 export const capabilitiesSchema = z.object({ inputMonitoring: z.boolean(), cameraPresence: z.boolean(), standingFocus: z.literal(false) }).strict();
 export type Capabilities = z.infer<typeof capabilitiesSchema>;
-export const timerCommandSchema = z.enum(["start", "pause", "resume", "next", "reset", "start-standing-break"]);
+export const timerCommandSchema = z.enum(["start", "pause", "resume", "next", "reset", "start-standing-break", "exit-standing-break"]);
 export type TimerCommand = z.infer<typeof timerCommandSchema>;
 // 领域：Electron / 摄像头会话契约
 // 顺序：Main 会话更新 -> Preload -> Renderer 检测 -> 带代次的 presence 回报。

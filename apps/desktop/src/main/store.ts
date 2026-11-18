@@ -1,9 +1,10 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
 import { defaultSettings } from "./timer.js";
-import { settingsSchema, timerSnapshotSchema, type Settings } from "../shared/contracts.js";
-import { checkpointOf, timerCheckpointSchema, type TimerCheckpoint } from "./checkpoint.js";
+import { settingsSchema, type Settings } from "../shared/contracts.js";
+import { checkpointOf, legacyTimerSnapshotSchema, storedTimerCheckpointSchema, timerCheckpointSchema, type TimerCheckpoint } from "./checkpoint.js";
 import type { CompletedSession, TimerStore } from "./timer.js";
 import { archiveDatabaseForRebuild, backupDatabaseFiles, StoreRecoveryError } from "./store-recovery.js";
 
@@ -17,14 +18,18 @@ const snapshotSchemaVersion = 4;
 
 // 领域：SQLite / 设置兼容
 // 顺序：旧设置 JSON -> Store 读取校验 -> 完整 Settings -> Main IPC。
-// 作用：仅为旧库缺少的外观选项和站立休息时长补默认值。
-// 原因：保留显式偏好，缺省站立时长跟随普通休息，且不能让 IPC patch 自动添加字段。
-// 边界：不覆盖显式 false 或 null，不接受未知字段或错误类型，不改已发布迁移。
+// 作用：为旧库缺少的外观选项补默认值，并剥离早期实验构建保存的大站独立时长字段。
+// 原因：大站改为按剩余时间两倍自动折算，保留已有数据库可读性且不放宽类型校验。
+// 边界：不覆盖显式 false，不接受未知字段或畸形数值，不改已发布迁移。
 const storedSettingsSchema = settingsSchema.extend({
   followWorkspaces: settingsSchema.shape.followWorkspaces.default(true),
   autoFade: settingsSchema.shape.autoFade.default(true),
-  standingShortBreakDurationSeconds: settingsSchema.shape.standingShortBreakDurationSeconds.default(null),
-  standingLongBreakDurationSeconds: settingsSchema.shape.standingLongBreakDurationSeconds.default(null),
+  standingShortBreakDurationSeconds: z.number().int().min(60).max(7200).multipleOf(60).nullable().optional(),
+  standingLongBreakDurationSeconds: z.number().int().min(60).max(10800).multipleOf(60).nullable().optional(),
+}).transform((settings) => {
+  delete settings.standingShortBreakDurationSeconds;
+  delete settings.standingLongBreakDurationSeconds;
+  return settings;
 });
 
 function parseCheckpointJson(json: string): unknown {
@@ -108,7 +113,7 @@ export class SqliteStore implements TimerStore {
       const row = this.database.prepare("SELECT schema_version, snapshot_json FROM timer_snapshot WHERE singleton = 1").get() as { schema_version: number; snapshot_json: string } | undefined;
       if (!row) return undefined;
       if (row.schema_version !== snapshotSchemaVersion) throw new Error("计时快照版本不兼容");
-      const result = timerCheckpointSchema.safeParse(parseCheckpointJson(row.snapshot_json));
+      const result = storedTimerCheckpointSchema.safeParse(parseCheckpointJson(row.snapshot_json));
       if (!result.success) throw new Error("计时快照格式不兼容");
       return result.data;
     } catch (error) {
@@ -164,7 +169,7 @@ export class SqliteStore implements TimerStore {
     const row = this.database.prepare("SELECT schema_version, snapshot_json FROM timer_snapshot WHERE singleton = 1").get() as { schema_version: number; snapshot_json: string } | undefined;
     if (!row || row.schema_version === snapshotSchemaVersion) return;
     if (![1, 2, 3].includes(row.schema_version)) throw new Error("计时快照版本不兼容");
-    const legacy = timerSnapshotSchema.safeParse(parseCheckpointJson(row.snapshot_json));
+    const legacy = legacyTimerSnapshotSchema.safeParse(parseCheckpointJson(row.snapshot_json));
     if (!legacy.success) throw new Error("计时快照格式不兼容");
     this.database.prepare("UPDATE timer_snapshot SET schema_version=?, snapshot_json=? WHERE singleton=1")
       .run(snapshotSchemaVersion, JSON.stringify(checkpointOf(legacy.data)));

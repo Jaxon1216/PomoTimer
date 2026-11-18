@@ -721,7 +721,7 @@ test("shows the final ten seconds of preparation, resets on input, and starts a 
   await app.close();
 });
 
-test("offers standing only before a break starts and preserves manual progress across input, lock and restart", async ({ launchApplication }, testInfo) => {
+test("switches an already running break to standing and resumes ordinary progress after lock and restart", async ({ launchApplication }, testInfo) => {
   const userData = testInfo.outputPath("standing-user-data");
   let app = await launchApplication(userData);
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
@@ -733,9 +733,22 @@ test("offers standing only before a break starts and preserves manual progress a
   await expect(window.locator(".statePill")).toContainText("5 秒后");
   await assertTimerLayout(window, "vertical");
   await window.screenshot({ path: testInfo.outputPath("standing-preparation.png") });
+  await app.evaluate(({ powerMonitor }) => {
+    const now = performance.now();
+    Object.defineProperty(performance, "now", { configurable: true, value: () => now });
+    powerMonitor.getSystemIdleTime = () => 40;
+  });
+  await waitForInputSamples(app, 1);
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).status).toBe("running");
+  await app.evaluate(() => {
+    const now = performance.now();
+    Object.defineProperty(performance, "now", { configurable: true, value: () => now + 60_000 });
+  });
+  await expect(window.locator("time")).toHaveText("04:00");
   await resizeContent(app, window, 160, 180);
+  await expect(window.getByRole("button", { name: "切换大站" })).toBeVisible();
   await window.getByRole("button", { name: "更多操作" }).click();
-  const standing = window.getByRole("menuitem", { name: "已站立，开始大站" });
+  const standing = window.getByRole("menuitem", { name: "切换大站" });
   await expect(standing).toBeVisible();
   const menuBox = await window.getByRole("menu").boundingBox();
   expect(menuBox).not.toBeNull();
@@ -744,7 +757,7 @@ test("offers standing only before a break starts and preserves manual progress a
   await standing.click();
   await expect(window.getByRole("heading", { name: "大站短休" })).toBeVisible();
   expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
-    status: "running", round: { breakMode: "standing", totalDurationMs: 600_000, hasStarted: true },
+    status: "running", remainingMs: 480_000, round: { breakMode: "standing", totalDurationMs: 600_000 },
     automation: { activePresenceSource: "none", breakPreparation: null, manualPauseLocked: false },
   });
   await assertTimerLayout(window);
@@ -772,23 +785,27 @@ test("offers standing only before a break starts and preserves manual progress a
   await waitForInputSamples(app, 1);
   expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
     status: "auto-paused", remainingMs: locked.remainingMs,
-    round: { breakMode: "standing", hasStarted: true }, automation: { activePresenceSource: "none" },
+    round: { breakMode: "standing" }, automation: { activePresenceSource: "none" },
   });
-  await window.getByRole("button", { name: "继续大站" }).click();
-  await window.evaluate(async () => { await window.pomodoro.command("next"); await window.pomodoro.command("next"); });
+  await resizeContent(app, window, 160, 180);
+  await window.getByRole("button", { name: "切回普通休息" }).click();
+  await expect(window.getByRole("heading", { name: "短休", exact: true })).toBeVisible();
+  expect(await window.evaluate(() => window.pomodoro.getSnapshot())).toMatchObject({
+    status: "auto-paused", remainingMs: Math.ceil(locked.remainingMs / 2),
+    round: { breakMode: "active", totalDurationMs: 300_000 }, automation: { activePresenceSource: "input" },
+  });
   await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 40; });
   await waitForInputSamples(app, 1);
   await expect.poll(async () => (await window.evaluate(() => window.pomodoro.getSnapshot())).status).toBe("running");
-  await app.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 0; });
-  await waitForInputSamples(app, 1);
+  await window.evaluate(() => window.pomodoro.command("next"));
   await window.getByRole("button", { name: "更多操作" }).click();
-  await expect(window.getByRole("menuitem", { name: "已站立，开始大站" })).toHaveCount(0);
+  await expect(window.getByRole("menuitem", { name: "切换大站" })).toHaveCount(0);
   const rejection = await window.evaluate(async () => {
     try { await window.pomodoro.command("start-standing-break"); return "accepted"; }
     catch (reason) { return reason instanceof Error ? reason.message : String(reason); }
   });
   expect(rejection).not.toBe("accepted");
-  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).round.breakMode).toBe("active");
+  expect((await window.evaluate(() => window.pomodoro.getSnapshot())).round.kind).toBe("focus");
 });
 
 test("fits a 180 minute standing long break at the minimum window size", async ({ launchApplication }, testInfo) => {
@@ -800,7 +817,7 @@ test("fits a 180 minute standing long break at the minimum window size", async (
     await window.pomodoro.updateSettings({ longBreakDurationSeconds: 5400 });
     for (let index = 0; index < 5; index += 1) await window.pomodoro.command("next");
   });
-  await window.getByRole("button", { name: "已站立，开始大站", exact: true }).first().click();
+  await window.getByRole("button", { name: "切换大站", exact: true }).click();
   await window.evaluate(() => window.pomodoro.command("reset"));
   await expect(window.locator("time")).toHaveText("180:00");
   await expect(window.getByRole("heading", { name: "大站长休" })).toBeVisible();

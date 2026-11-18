@@ -1,8 +1,20 @@
 # 大站休息验证记录
 
+## 2026-11-18：双向切换
+
+在 `codex/standing-break` 的 `80f834b` 上完成双向切换。检查使用 macOS 26.4.1（25E253）arm64、Node.js 24.15.0、Electron 33.4.11 和隔离的数据目录。
+
+- lint、类型检查和 Electron 构建通过。真实 SQLite 39/39 通过，覆盖旧快照和重启后恢复原休息方式。时钟边界和重启断言补齐后，计时状态机 110/110 通过。
+- 本轮完整 Electron 运行结果为 24/32。完成卡片与摄像头双向切换联合用例、180 分钟最小窗口用例通过。8 项失败中多项报告测试窗口关闭，完整套件未复跑。
+- 对「普通休息已经运行后切入、重启后切回、由输入重新开始」的 Electron 用例单独补跑一次，通过。物理摄像头及 Windows 仍待验证。
+- 本机已从 ARM64 DMG 更新至 `0.1.0-beta.3-standing-toggle.20261118`。DMG 校验、完整签名与安装后 ASAR 核对通过，已从 `/Applications/Pomodoro Timer.app` 打开正常计时窗口，原有 23 条专注记录逐条保留。
+- 安装前的 SQLite 和旧版应用备份在本地忽略目录 `diagnostics/installed-data-backup-standing-toggle.ayM6ok`。本次只做安装、启动和数据核对。
+
+## 2026-11-15：准备期大站首版
+
 日期：2026-11-15。分支：`codex/standing-break`。实现前提交：`16162e7`，功能提交：`dbbb634`。本轮已生成并安装本地构建 `0.1.0-beta.3-standing.dbbb634`，未改变公开 beta.3 安装包、源码版本或发布 tag。行为与取舍见[设计记录](standing-break-design.md)，传播材料见[调研记录](standing-break-research.md)。
 
-后续已整合完成提醒并修正小窗的大站直接入口，当前本机版本为 `0.1.0-beta.3-standing-entry.28ef106`，最新交付及检查边界见[大站与完成提醒整合验证](standing-reminder-integration-validation.md)。下文保留本轮历史记录。
+首版之后整合了完成提醒并修正小窗入口，对应构建 `0.1.0-beta.3-standing-entry.28ef106`，见[大站与完成提醒整合验证](standing-reminder-integration-validation.md)。下文保留首版历史记录。
 
 ## 执行环境
 

@@ -6,7 +6,7 @@
 
 ```ts
 getSnapshot(): Promise<TimerSnapshot>
-command(command: "start" | "pause" | "resume" | "next" | "reset" | "start-standing-break"): Promise<TimerSnapshot>
+command(command: "start" | "pause" | "resume" | "next" | "reset" | "start-standing-break" | "exit-standing-break"): Promise<TimerSnapshot>
 getSettings(): Promise<Settings>
 updateSettings(patch: Partial<Omit<Settings, "version">>): Promise<Settings>
 getCapabilities(): Promise<Capabilities>
@@ -26,7 +26,7 @@ interface Capabilities { inputMonitoring: boolean; cameraPresence: boolean; stan
 
 `CameraState` 是 Main 决定的本次检测生命周期。切换模式、睡眠/锁屏、恢复或释放检测时更换代次；Main 拒绝停用或旧代次的报告。首次有效报告前有 25 秒启动窗口，之后连续 5 秒没有有效报告则停止监控并回退触控。`unknown` 表示故障，不作为离席使用。
 
-大站期间 `CameraState.enabled=false`，Main 临时释放会话但保留监控偏好；主动释放不触发故障回退。后续轮次按原偏好重新启用时签发新代次，并等待新结果。`Capabilities.standingFocus` 仍为 `false`，本次新增的是当前休息轮的大站命令，不是站立专注。
+大站期间 `CameraState.enabled=false`，Main 临时释放会话并保留监控偏好。切回普通休息或进入下一轮后，按当前偏好重新启用监控时签发新代次，并等待新结果。`Capabilities.standingFocus` 保持 `false`。
 
 窗口拖动和尺寸约束由原生窗口处理，Renderer 根据视口尺寸排版。这些操作独立于计时命令、事件和持久化。
 
@@ -65,16 +65,14 @@ type PauseReason = "none" | "input-away" | "camera-away" | "break-condition" | "
 interface TimerSnapshot {
   revision: number; emittedAt: string; status: TimerStatus; remainingMs: number;
   activeCycleRounds?: number;
-  round: { kind: RoundKind; cycleNumber: number; positionInCycle: number; focusRoundNumber: number | null; breakMode: RoundBreakMode | null; totalDurationMs: number; hasStarted?: boolean };
+  round: { kind: RoundKind; cycleNumber: number; positionInCycle: number; focusRoundNumber: number | null; breakMode: RoundBreakMode | null; totalDurationMs: number };
   automation: { activePresenceSource: "input" | "camera" | "none"; inputPresence: Presence; cameraPresence: Presence; inputMonitoringAvailable: boolean; cameraMonitoringAvailable: boolean; manualPauseLocked: boolean; pauseReason: PauseReason; breakPreparation?: { remainingSeconds: number; countdown: boolean } | null };
 }
 ```
 
 默认设置为 `30/5/30/5/30/10`。专注和活动休息使用 `focusPresenceSource` 选中的来源；桌前休息始终使用系统输入。`activePresenceSource` 表示当前轮次实际采用的来源，大站为 `none`。触控专注的首次与下一轮由用户开始，监控专注的有效 `present` 可自动开始 `idle` 或恢复自动暂停。专注中手动暂停设置锁；普通休息中点击暂停不建立永久锁，后续有效休息条件仍可自动开始或恢复。
 
-`round.hasStarted` 表示本轮自创建或显式重置后是否正式运行过。新 Engine 创建轮次和 `reset` 时输出 `false`，手动或自动开始时变为 `true`。字段可省略以读取旧 JSON；恢复时缺标记的旧 `idle` 轮次补 `false`，旧非 `idle` 轮次保守补 `true`，不能只凭剩余时间等于总时长判断未开始。`standing` 仅允许出现在休息轮，不能用于 `focus`。
-
-`start-standing-break` 仅接受普通短休或长休的准备期：`breakMode` 不是 `standing`、`hasStarted=false`、未运行且剩余时间等于总时长。命令同时声明站立、为本轮分配完整大站时长并立即开始；不改变周期位置、全局默认或后续轮次。普通休息一旦开始，不提供中途转换、重新开始大站或按已有进度折算；显式 `reset` 普通休息后，恢复完整时长与 `hasStarted=false`，可再次选择。
+`start-standing-break` 接受尚未结束的普通短休或长休，将本轮总时长和剩余时间翻倍并立即开始。`exit-standing-break` 接受尚未结束的大站短休或长休，将本轮总时长和剩余时间减半，剩余毫秒向上取整，并恢复进入大站时的普通休息方式。切回进入 `auto-paused`，等待来自当前感知源的有效自动条件。两个命令只作用于当前休息轮，在锁屏及存储故障期间拒绝执行。若处理命令时发现该轮已自然完成，命令拒绝，完成仍按通常流程处理。
 
 大站的 `pause` 产生 `auto-paused`、`manualPauseLocked=false`、`pauseReason="standing-confirmation"`；该状态不表示允许感知自动恢复。输入、摄像头及其故障不启动、暂停或继续大站，`breakPreparation` 为 `null`。睡眠、锁屏和重启冻结进度且不补计离线时间，待用户显式继续；锁屏期间拒绝开始或继续。大站的 `reset` 保留当前方式及最初分配的时长，`next` 和自然结束按原周期进入后续轮次，沿用原感知与默认休息偏好。
 
@@ -86,16 +84,7 @@ interface TimerSnapshot {
 
 `notificationsEnabled` 继续沿用已有布尔设置与默认值 `true`，界面称“完成弹窗与暂停通知”。它控制无声完成卡片及剩余的系统暂停通知；保存为 `false` 清除当前提醒，重新开启不补发先前已消费的完成版本，不增加迁移或新设置字段。
 
-大站增加以下完整设置字段；`defaultBreakMode` 仍为 `"active" | "desk"`：
-
-```ts
-interface StandingBreakSettings {
-  standingShortBreakDurationSeconds: number | null;
-  standingLongBreakDurationSeconds: number | null;
-}
-```
-
-两个时长默认均为 `null`，表示下一次 `start-standing-break` 采用当时对应普通短休或长休设置的两倍。显式值使用秒保存，必须为整分钟：短休 60–7200 秒，长休 60–10800 秒；两项可独立恢复为 `null`。修改设置只影响下一次开始大站，不追改已经分配的本轮总时长或剩余时间。两倍是用户确认的产品默认规则，不代表站立与其他休息的科学效果换算。
+`defaultBreakMode` 接受 `"active" | "desk"`。大站时长按本轮已分配的普通休息时长折算，设置变更从下一轮对应休息生效。
 
 窗口设置包含三个独立布尔字段：
 
@@ -109,7 +98,7 @@ interface WindowSettings {
 
 这些字段属于完整 `Settings`，不是新增 IPC 对象。新安装均为 `true`；`followWorkspaces` 仅在 macOS 生效。常驻顶部保持普通悬浮层级，自动淡化立即用于计时器页；macOS 跟随变化在保存回复后异步重建窗口，恢复位置、尺寸和页面，不新建 TimerEngine 或 Store。计划内重建使摄像头旧代次失效并暂时 `unknown`，保留选中的感知模式；新窗口重新初始化并等待有效样本。
 
-`Settings` 和 `SettingsPatch` 保持严格校验，未知字段、非布尔窗口选项及非法站立时长均拒绝。patch 中没有出现的字段保持原值，不能因为默认值而随其他设置一起重置。仅 Store 读取旧设置时为缺少的 `followWorkspaces`、`autoFade` 补 `true`，为缺少的两个站立时长补 `null`；已保存的显式数值、`null`、原有 `alwaysOnTop` 与窗口选项的 `false` 保持不变。非法旧值仍进入数据恢复路径，不静默替换。
+`Settings` 和 `SettingsPatch` 严格校验。patch 只修改传入的字段。Store 读取旧设置时为缺少的 `followWorkspaces`、`autoFade` 补 `true`，并在校验旧 `standingShortBreakDurationSeconds`、`standingLongBreakDurationSeconds` 后剥离它们。窗口开关的显式 `false` 会保留。非法旧值仍进入数据恢复路径。
 
 `focusPresenceSource: "input" | "camera"` 默认 `input`，它同时选择专注和活动休息的感知源。改变来源立即清除旧摄像头在场状态；当前轮次实际来源变化时，取消临时手动回退、清空准备状态并安全暂停活动轮次，等待新源样本。不重置计时，不解除专注的手动暂停锁；桌前休息的输入规则不因该设置变化而改变。监控专注只在有效 `present` 时开始/继续，监控活动休息只在有效 `away` 时开始/继续。摄像头故障由 Main 保存回退后的 `input` 设置，并通过 `settings.changed` 通知 Renderer；用户重新选择监控才重试。
 
@@ -134,9 +123,9 @@ Main 每 500ms 广播权威快照。命令、输入/摄像头采样、轮次变�
 
 保留并兼容既有表：`schema_migrations`、`settings`、单行 `timer_snapshot`、`completed_focus_sessions`。只有完整结束的 focus 写入 `completed_focus_sessions`。完成记录使用由周期和专注轮次生成的稳定 ID，`INSERT OR IGNORE` 防止重试重复计数。统计按 `local_date` 聚合今日、本周和最近 52 周数据。
 
-`TimerSnapshot` 是运行时 IPC 契约。闲置秒数只在 Main 内存中使用，Renderer 通过实时快照读取推断出的在场状态。摄像头帧只在 Renderer 瞬时处理，三态和代次只在内存中使用。SQLite 的计时检查点保存 `revision`、`emittedAt`、`round`、`activeCycleRounds`、`status`、`remainingMs`，以及可选的系统挂起 `interruption`；`round` 包含本轮方式、已分配时长与 `hasStarted`。普通检查点与完成专注的事务使用同一写入格式，不保存 `automation`、实际感知源 `none`、presence、休息准备倒数、摄像头代次或检测历史。大站只保存恢复所需的轮次进度，不写完成专注记录。
+`TimerSnapshot` 是运行时 IPC 契约。闲置秒数只在 Main 内存中使用，Renderer 通过实时快照读取推断出的在场状态。摄像头帧只在 Renderer 瞬时处理，三态和代次只在内存中使用。SQLite 检查点保存 `revision`、`emittedAt`、`round`、`activeCycleRounds`、`status`、`remainingMs` 和可选的系统挂起 `interruption`。大站另外保存原普通休息方式 `ordinaryBreakMode`，该字段只在私有检查点中使用。普通检查点与完成专注的事务使用同一写入格式。`automation`、presence、休息准备倒数、摄像头代次和检测历史只在内存中使用。
 
-设置中可保存选中的专注源与两个站立时长，沿用版本 1 设置格式；检查点继续使用版本 4，不改动已发布的数据库迁移和校验和。重启后，两种在场状态均为 `unknown`，休息准备状态为 `null`，直到收到有效样本；运行中的大站恢复为 `auto-paused`，只能手动继续。旧检查点中的 `manual-paused` 普通休息轮转为自动等待，剩余时间保持不变；专注的手动暂停锁继续保留。`hasStarted` 的旧字段补值在 TimerEngine 恢复边界完成。升级时，可读取的旧检查点转换为新格式，设置和完成记录继续保留。既有备份和故障恢复归档按原样保存，可能包含旧版本写入的字段。
+检查点继续使用版本 4，保留已发布的迁移与校验和。Store 读入旧 `round.hasStarted` 时验证并剥离该字段。旧大站缺少 `ordinaryBreakMode` 时，首次恢复采用保存的默认休息方式，并保留已分配时长和剩余时间。运行中的大站重启后恢复为 `auto-paused`，等待显式继续或切换。普通休息的旧 `manual-paused` 转为自动等待，专注保留手动暂停锁。两种在场状态重启后均从 `unknown` 开始，准备状态从 `null` 开始，等待新样本。
 
 `alwaysOnTop`、`followWorkspaces`、`autoFade` 随版本 1 的设置 JSON 保存；兼容补值发生在 Store 读取边界，不改写已发布的迁移或校验和。淡化计时器、指针状态、键盘焦点与当前页面不写入 SQLite。
 
